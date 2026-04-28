@@ -1,0 +1,82 @@
+# Makefile for Emscripten (WebAssembly) build of conformal-parameterization
+# Usage:
+#   1. Install and activate emsdk: source emsdk_env.sh
+#   2. make -f Makefile.emscripten
+
+CXX = emcc
+CXXFLAGS = -std=c++17 -O2 -Wall -DUSE_MOSEK_STUB=0
+EMFLAGS = \
+	-s WASM=1 \
+	-s MODULARIZE=1 \
+	-s EXPORT_NAME="ConformalParamModule" \
+	-s "EXPORTED_RUNTIME_METHODS=['ccall', 'cwrap', 'getValue', 'setValue', 'UTF8ToString', 'stringToUTF8']" \
+	-s ALLOW_MEMORY_GROWTH=1 \
+	-s FORCE_FILESYSTEM=1 \
+	-s ERRNO_EXCEPTIONS=0 \
+	-s DISABLE_EXCEPTION_CATCHING=1 \
+	--bind \
+	-fno-exceptions
+
+# Eigen include path (header-only)
+EIGEN_INC = -I./deps/Eigen
+
+# Output directory
+OUT_DIR = ../wasm-build
+
+# Target name
+TARGET = $(OUT_DIR)/conformal_param.js
+
+# Source files (excluding main.cpp and files requiring full MOSEK)
+SRCS = \
+	wasm_bindings.cpp \
+	Mesh.cpp \
+	MeshIO.cpp \
+	Lscm.cpp \
+	Cetm.cpp \
+	Solver.cpp \
+	Parameterization.cpp \
+	Utils.cpp \
+	QcError.cpp \
+	Scp.cpp
+
+# Headers
+HEADERS = \
+	Mesh.h \
+	MeshIO.h \
+	Lscm.h \
+	Cetm.h \
+	CirclePatterns.h \
+	Solver.h \
+	Parameterization.h \
+	Types.h \
+	Vertex.h \
+	HalfEdge.h \
+	Edge.h \
+	Face.h \
+	Utils.h \
+	QcError.h \
+	Scp.h \
+	RenderData.h \
+	MosekStub.h
+
+.PHONY: all clean
+
+all: $(TARGET)
+
+$(TARGET): $(SRCS) $(HEADERS)
+	@mkdir -p $(OUT_DIR)
+	$(CXX) $(CXXFLAGS) $(EMFLAGS) $(EIGEN_INC) -I. $(SRCS) -o $(TARGET)
+	@echo ""
+	@echo "Build complete! Output:"
+	@echo "  JS:   $(TARGET)"
+	@echo "  WASM: $(OUT_DIR)/conformal_param.wasm"
+	@echo ""
+	@echo "Usage in JavaScript:"
+	@echo "  import Module from './conformal_param.js';"
+	@echo "  const param = new Module.ConformalParam();"
+	@echo "  param.initMesh(positions, faces);"
+	@echo "  param.computeLSCM();"
+	@echo "  const uvs = param.getUVs();"
+
+clean:
+	rm -f $(TARGET) $(OUT_DIR)/conformal_param.wasm $(OUT_DIR)/conformal_param.worker.js
