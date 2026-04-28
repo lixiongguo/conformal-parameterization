@@ -1,5 +1,9 @@
 #include "Solver.h"
+#ifdef USE_MOSEK
 #include "MosekSolver.h"
+#else
+#include "MosekStub.h"
+#endif
 #include <deque>
 #include <eigen/SparseCholesky>
 #define beta 0.9
