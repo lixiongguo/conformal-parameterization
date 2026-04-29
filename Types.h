@@ -8,9 +8,9 @@
 #include <iostream>
 #include <iomanip>
 #include "math.h"
-#include <eigen/Core>
-#include <eigen/Dense>
-#include <eigen/SparseCore>
+#include <Eigen/Core>
+#include <Eigen/Dense>
+#include <Eigen/SparseCore>
 #define SCP 0
 #define LSCM 1
 #define CIRCLE_PATTERNS 2
