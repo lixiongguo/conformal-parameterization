@@ -125,9 +125,32 @@ int solve_lscm(double* posPtr, int posLen, int* facePtr, int faceLen, int anchor
     // 提取 UV 到全局变量
     g_uv_result.clear();
     g_uv_result.reserve(g_mesh->vertices.size() * 2);
-    for (VertexCIter v = g_mesh->vertices.begin(); v != g_mesh->vertices.end(); v++) {
-        g_uv_result.push_back(v->uv.x());
-        g_uv_result.push_back(v->uv.y());
+
+       // 第一遍：计算 UV 边界
+    double min_u = std::numeric_limits<double>::infinity();
+    double max_u = -std::numeric_limits<double>::infinity();
+    double min_v = std::numeric_limits<double>::infinity();
+    double max_v = -std::numeric_limits<double>::infinity();
+    
+    for (VertexCIter vit = g_mesh->vertices.begin(); vit != g_mesh->vertices.end(); ++vit) {
+        double u = vit->uv.x();
+        double v = vit->uv.y();
+        if (u < min_u) min_u = u;
+        if (u > max_u) max_u = u;
+        if (v < min_v) min_v = v;
+        if (v > max_v) max_v = v;
+    }
+    
+    // 避免除零
+    double range_u = max_u - min_u;
+    double range_v = max_v - min_v;
+    if (range_u < 1e-10) range_u = 1.0;
+    if (range_v < 1e-10) range_v = 1.0;
+    
+    // 第二遍：归一化并存储 (U 和 V 独立归一化到 [0,1])
+    for (VertexCIter vit = g_mesh->vertices.begin(); vit != g_mesh->vertices.end(); ++vit) {
+        g_uv_result.push_back((vit->uv.x() - min_u) / range_u);
+        g_uv_result.push_back((vit->uv.y() - min_v) / range_v);
     }
 
     return 0;
