@@ -13,7 +13,7 @@ Write-Host "===================================="
 
 # ---- LSCM ----
 Write-Host "[1/2] Building LSCM..."
-emcc wasm_main.cpp Mesh.cpp MeshIO.cpp Lscm.cpp Parameterization.cpp QcError.cpp Solver.cpp Utils.cpp Vertex.cpp Edge.cpp Face.cpp HalfEdge.cpp `
+emcc wasm_main.cpp Mesh.cpp MeshIO.cpp Lscm.cpp Parameterization.cpp QcError.cpp Solver.cpp Vertex.cpp Edge.cpp Face.cpp HalfEdge.cpp `
   -I./deps -I./deps/Eigen -I. `
   -s MODULARIZE=1 -s "EXPORT_NAME='LSCMSolver'" `
   -s "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','UTF8ToString','getValue','setValue']" `
@@ -30,7 +30,7 @@ emcc wasm_tutte_arap.cpp Tutte.cpp ARAP.cpp Mesh.cpp MeshIO.cpp Parameterization
   -I./deps -I./deps/Eigen -I. `
   -s MODULARIZE=1 -s "EXPORT_NAME='TutteARAPSolver'" `
   -s "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','getValue','setValue']" `
-  -s "EXPORTED_FUNCTIONS=['_malloc','_free','_solve_tutte_circle','_solve_tutte_square','_solve_arap','_get_ta_uv_result','_get_ta_uv_result_size','_get_ta_last_time_ms','_ta_dispose']" `
+  -s "EXPORTED_FUNCTIONS=['_malloc','_free','_solve_tutte_circle','_solve_tutte_square','_solve_arap','_compute_qc_error','_load_mesh_with_uv','_get_ta_uv_result','_get_ta_uv_result_size','_get_ta_last_time_ms','_get_qc_errors','_get_qc_errors_size','_get_qc_colors','_get_qc_colors_size','_ta_dispose']" `
   -s ALLOW_MEMORY_GROWTH=1 -s WASM=1 `
   -std=c++17 -O2 `
   -o "$outDir\tutte_arap_solver.js"
