@@ -61,7 +61,37 @@ void QuadCover::buildCotLaplacian(Eigen::SparseMatrix<double>& L) {
 }
 
 // ============================================================
-// Phase 0: Principal curvature estimation (PCA on vertex normals)
+// Phase 0: Vertex normals (area-weighted face normals)
+// ============================================================
+
+void QuadCover::computeVertexNormals() {
+    vertexNormals.resize(nVerts, 3);
+    vertexNormals.setZero();
+    
+    for (int fi = 0; fi < nFaces; fi++) {
+        int v0 = faces[fi*3], v1 = faces[fi*3+1], v2 = faces[fi*3+2];
+        Eigen::Vector3d p0 = vertPos.row(v0), p1 = vertPos.row(v1), p2 = vertPos.row(v2);
+        
+        Eigen::Vector3d fn = (p1 - p0).cross(p2 - p0);
+        double area = 0.5 * fn.norm();
+        fn.normalize();
+        
+        // Accumulate area-weighted face normal to each vertex
+        for (int k = 0; k < 3; k++) {
+            int v = faces[fi*3+k];
+            vertexNormals.row(v) += area * fn;
+        }
+    }
+    
+    // Normalize
+    for (int i = 0; i < nVerts; i++) {
+        double len = vertexNormals.row(i).norm();
+        if (len > 1e-12) vertexNormals.row(i) /= len;
+    }
+}
+
+// ============================================================
+// Phase 0: Weingarten map W = I⁻¹·II → principal curvature direction
 // ============================================================
 
 void QuadCover::estimatePrincipalCurvature() {
@@ -72,32 +102,96 @@ void QuadCover::estimatePrincipalCurvature() {
         int v0 = faces[fi*3], v1 = faces[fi*3+1], v2 = faces[fi*3+2];
         Eigen::Vector3d p0 = vertPos.row(v0), p1 = vertPos.row(v1), p2 = vertPos.row(v2);
         
-        // Face normal
-        Eigen::Vector3d fn = (p1-p0).cross(p2-p0);
-        double area = fn.norm();
-        fn /= std::max(area, 1e-12);
+        // 1. Face normal
+        Eigen::Vector3d fn = (p1 - p0).cross(p2 - p0);
+        double area = 0.5 * fn.norm();
+        fn /= std::max(2.0 * area, 1e-12);
         faceNormals.row(fi) = fn;
         
-        // Local frame on face
+        // 2. Tangent plane local frame {t1, t2}
         Eigen::Vector3d t1, t2;
         buildLocalFrame(fn, t1, t2);
         
-        // Estimate principal direction: use longest edge as reference
-        Eigen::Vector3d e0 = p1-p0, e1 = p2-p1, e2 = p0-p2;
-        double l0 = e0.squaredNorm(), l1 = e1.squaredNorm(), l2 = e2.squaredNorm();
-        Eigen::Vector3d longest;
-        if (l0 >= l1 && l0 >= l2) longest = e0;
-        else if (l1 >= l0 && l1 >= l2) longest = e1;
-        else longest = e2;
+        // 3. Vertex normals (area-weighted, precomputed)
+        Eigen::Vector3d n0 = vertexNormals.row(v0);
+        Eigen::Vector3d n1 = vertexNormals.row(v1);
+        Eigen::Vector3d n2 = vertexNormals.row(v2);
         
-        // Project longest edge to tangent plane
-        double ex = longest.dot(t1), ey = longest.dot(t2);
-        double len = sqrt(ex*ex + ey*ey);
-        if (len > 1e-8) { ex /= len; ey /= len; }
-        else { ex = 1.0; ey = 0.0; }
+        // 4. Local 2D coordinates of edges in tangent plane
+        Eigen::Vector3d e01 = p1 - p0, e02 = p2 - p0;
+        double u1 = e01.dot(t1), v1_coord = e01.dot(t2);
+        double u2 = e02.dot(t1), v2_coord = e02.dot(t2);
         
-        // Store as 3D direction in tangent plane
-        faceDirs.row(fi) = (ex * t1 + ey * t2).normalized();
+        // 5. First fundamental form I (constant for the face geometry)
+        Matrix2d I_mat;
+        I_mat << u1*u1 + v1_coord*v1_coord,  u1*u2 + v1_coord*v2_coord,
+                 u1*u2 + v1_coord*v2_coord,  u2*u2 + v2_coord*v2_coord;
+        
+        // 6. Second fundamental form II via normal variation
+        // Δn·t₁ = (n₁-n₀)·t₁,  Δn·t₂ = (n₂-n₀)·t₂  projected onto tangent plane
+        Eigen::Vector3d dn1 = n1 - n0;
+        Eigen::Vector3d dn2 = n2 - n0;
+        
+        // II = [e f; f g]  where:
+        //   e = -∂²p/∂u² · n  approximated by finite differences
+        //   f = -∂²p/∂u∂v · n
+        //   g = -∂²p/∂v² · n
+        //
+        // Using: dn = -II · du  (neglecting higher-order terms)
+        // Solve 2×2 system:  [u1 v1; u2 v2]ᵀ [e;f] ≈ [-dn1·t1; -dn2·t1]
+        // but for symmetric II we estimate e,f,g via least squares
+        
+        // Build RHS: normal variation dotted with tangent basis
+        Eigen::Vector2d rhs1, rhs2;
+        rhs1 << -dn1.dot(t1), -dn2.dot(t1);  // for e, f (first row of II)
+        rhs2 << -dn1.dot(t2), -dn2.dot(t2);  // for f, g (second row of II)
+        
+        // Solve least squares: 2 equations for 2 unknowns each row
+        // M = [u1 v1; u2 v2],  solve Mᵀ [e;f] = rhs1,  Mᵀ [f;g] = rhs2
+        Matrix2d M;
+        M << u1, v1_coord,
+             u2, v2_coord;
+        
+        Matrix2d Mt = M.transpose();
+        
+        // Solve Mt * x = rhs → normal equations: M*Mt*x = M*rhs
+        Eigen::Vector2d ef = (Mt * M).ldlt().solve(Mt * rhs1);
+        Eigen::Vector2d fg = (Mt * M).ldlt().solve(Mt * rhs2);
+        
+        double e_coef = ef(0), f_coef = ef(1);
+        double fg_f = fg(0), g_coef = fg(1);
+        
+        // Symmetrize f = (f_coef + fg_f) / 2
+        double f_sym = 0.5 * (f_coef + fg_f);
+        
+        // 7. Shape operator (Weingarten map) W = I⁻¹ · II
+        Matrix2d II_mat;
+        II_mat << e_coef, f_sym,
+                  f_sym,  g_coef;
+        
+        Matrix2d I_inv = I_mat.inverse();
+        Matrix2d W = I_inv * II_mat;
+        
+        // Symmetrize W = (W + Wᵀ)/2 for real eigenvalues
+        Matrix2d W_sym = 0.5 * (W + W.transpose());
+        
+        // 8. Eigen-decomposition → principal curvature directions
+        Eigen::SelfAdjointEigenSolver<Matrix2d> es(W_sym);
+        
+        // Use direction of max |eigenvalue| (maximal curvature magnitude)
+        Eigen::Vector2d dir2d;
+        if (fabs(es.eigenvalues()(0)) >= fabs(es.eigenvalues()(1)))
+            dir2d = es.eigenvectors().col(0);
+        else
+            dir2d = es.eigenvectors().col(1);
+        
+        // 9. Map back to 3D
+        Eigen::Vector3d dir3d = dir2d(0) * t1 + dir2d(1) * t2;
+        double dlen = dir3d.norm();
+        if (dlen > 1e-12) dir3d /= dlen;
+        else dir3d = t1;  // fallback for degenerate faces
+        
+        faceDirs.row(fi) = dir3d;
     }
 }
 
@@ -364,7 +458,8 @@ void QuadCover::parameterize() {
     }
     nEdges = (int)edgeList.size();
     
-    // Phase 0: Principal curvature
+    // Phase 0: Compute vertex normals, then Weingarten map → principal curvature
+    computeVertexNormals();
     estimatePrincipalCurvature();
     
     // Phase 1: Matching

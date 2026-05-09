@@ -8,7 +8,8 @@
  * QuadCover: Global seamless quad parameterization via branch covering.
  * 
  * Algorithm phases (Kälberer et al. 2007):
- *   0. Estimate principal curvature directions (cross field / 4-RoSy)
+ *   0. Compute vertex normals, then Weingarten map W = I⁻¹·II per face
+ *      → eigen-decomposition yields principal curvature direction
  *   1. Compute matching r_ij ∈ {0,1,2,3} per edge
  *   2. Compute layer shift ls(v) = Σ r / 4, identify singularities
  *   3. Build covering vector field (two orthogonal directions per face)
@@ -21,7 +22,10 @@ public:
     void parameterize() override;
     
 protected:
-    // Phase 0: Principal curvature estimation via PCA on vertex normals
+    // Phase 0: Compute vertex normals (area-weighted face normals)
+    void computeVertexNormals();
+    
+    // Phase 0: Weingarten map W = I⁻¹·II → eigen-decomposition for principal directions
     void estimatePrincipalCurvature();
     
     // Phase 1: Compute matching per edge
@@ -46,6 +50,7 @@ protected:
     Eigen::VectorXi faces;            // F rows × 3, flattened
     int nVerts, nFaces;
     
+    Eigen::MatrixXd vertexNormals;    // per-vertex normal (nVerts × 3), area-weighted
     Eigen::MatrixXd faceNormals;      // per-face normal (nFaces × 3)
     Eigen::MatrixXd faceDirs;         // per-face reference direction (nFaces × 3)
     Eigen::MatrixXd faceD1, faceD2;   // covering field: two orthogonal dirs per face
