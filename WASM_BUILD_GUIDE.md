@@ -4,24 +4,101 @@
 
 ## 环境
 
-- Emscripten: `cpp/emsdk/`（内置 Node 22.16 / Python 3.13）
+- Emscripten: `cpp/emsdk/`（内置 Node / Python）
 - C++ 标准: C++17, 优化 `-O2`
-- 依赖: Eigen 3（header-only，`deps/Eigen/`）
+- 依赖:
+  - Eigen 3（header-only，`cpp/deps/Eigen/`）
+  - libigl（`cpp/Libigl-Discrete-Geometry/libigl/include/`，仅 principal_curvature 需要）
+  - glm（`cpp/deps/glm/`）
+  - mosek（`cpp/deps/mosek/`）
+
+## 一键编译（macOS / Linux）
+
+```bash
+# 1. 激活 emsdk
+source ../../emsdk/emsdk_env.sh
+
+# 2. 进入目录
+cd cpp/conformal-parameterization
+
+# 3. 构建全部 11 个目标
+make all
+
+# 或单独构建某个目标
+make lscm
+make tutte_arap
+make cetm
+make circle_patterns
+make holo
+make miq
+make quadcover
+make ricci
+make bff
+make bd_lscm
+make principal_curvature
+
+# 清理
+make clean
+
+# 环境检查
+make check
+```
 
 ## 编译目标
 
-| 模块 | EXPORT_NAME | 输出文件 | 入口 |
+| 目标 | EXPORT_NAME | 输出文件 | 入口文件 |
 |---|---|---|---|
 | LSCM | `LSCMSolver` | `lscm_solver.js` | `wasm_main.cpp` |
-| BD-LSCM | `BDLSCMSolver` | `bd_lscm_solver.js` | `BoundedDistortion/wasm_bd_lscm.cpp` |
 | Tutte+ARAP | `TutteARAPSolver` | `tutte_arap_solver.js` | `wasm_tutte_arap.cpp` |
+| CETM | `CETMSolver` | `cetm_solver.js` | `wasm_cetm.cpp` |
+| Circle Patterns | `CPSolver` | `cp_solver.js` | `wasm_circle_patterns.cpp` |
+| Holomorphic 1-Form | `HoloSolver` | `holo_solver.js` | `wasm_holo.cpp` |
+| MIQ Quad | `MIQSolver` | `miq_solver.js` | `wasm_miq.cpp` |
+| QuadCover | `QuadCoverSolver` | `quadcover_solver.js` | `wasm_quadcover.cpp` |
+| Ricci Flow | `RicciFlowSolver` | `ricci_solver.js` | `wasm_ricci.cpp` |
+| BFF | `BFFSolver` | `bff_solver.js` | `wasm_bff.cpp` |
+| BD-LSCM | `BDLSCMSolver` | `bd_lscm_solver.js` | `wasm_bd_lscm.cpp` |
+| Principal Curvature | `PrincipalCurvatureSolver` | `principal_curvature.js` | `principal_curvature_wasm.cpp` |
 
-## 一键编译
+## 输出文件
 
-```powershell
-cd cpp/conformal-parameterization
-powershell -ExecutionPolicy Bypass -File build_wasm_full.ps1
+编译后 `assets/wasm/` 目录结构：
+
 ```
+assets/wasm/
+├── lscm_solver.js
+├── lscm_solver.wasm
+├── tutte_arap_solver.js
+├── tutte_arap_solver.wasm
+├── cetm_solver.js
+├── cetm_solver.wasm
+├── cp_solver.js
+├── cp_solver.wasm
+├── holo_solver.js
+├── holo_solver.wasm
+├── miq_solver.js
+├── miq_solver.wasm
+├── quadcover_solver.js
+├── quadcover_solver.wasm
+├── ricci_solver.js
+├── ricci_solver.wasm
+├── bff_solver.js
+├── bff_solver.js
+├── bd_lscm_solver.js
+├── bd_lscm_solver.wasm
+├── principal_curvature.js
+└── principal_curvature.wasm
+```
+
+## Makefile 变量覆盖
+
+如需自定义路径，可在 make 命令行覆盖：
+
+```bash
+make all EMSDK_ROOT=../../emsdk EMXX=em++ EIGEN_INC=../../deps/Eigen OUT_DIR=../../../assets/wasm
+```
+
+或在 Makefile 顶部直接修改默认值。
 
 ## 关键编译参数
 
@@ -34,46 +111,6 @@ powershell -ExecutionPolicy Bypass -File build_wasm_full.ps1
 | `ALLOW_MEMORY_GROWTH=1` | WASM 堆动态增长 |
 | `WASM=1` | 生成 `.wasm`（非 asm.js） |
 
-## 遇到的问题 & 解决方案
-
-### 1. `_malloc` / `_free` 导出失败
-
-```
-error: undefined exported symbol: "_malloc" in EXPORTED_RUNTIME_METHODS
-error: undefined exported symbol: "_free" in EXPORTED_RUNTIME_METHODS
-```
-
-**原因**：新版本 Emscripten（3.x+）中 `_malloc`/`_free` 不属于 `EXPORTED_RUNTIME_METHODS`。
-
-**解决**：移到 `EXPORTED_FUNCTIONS` 中：
-
-```diff
-- -s "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','_malloc','_free']"
-+ -s "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','getValue','setValue']"
-+ -s "EXPORTED_FUNCTIONS=['_malloc','_free','_solve_xxx',...]"
-```
-
-> 若使用 `--bind`（Embind），`_malloc`/`_free` 会自动可用。
-
-### 2. `getValue` / `setValue` 不可用
-
-JS 侧报 `wasmModule.getValue is not a function`。
-
-**解决**：在 `EXPORTED_RUNTIME_METHODS` 中显式声明：
-```bash
--s "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','getValue','setValue']"
-```
-
-### 3. PowerShell 中文编码问题
-
-```
-The string is missing the terminator: ".
-```
-
-**原因**：`.ps1` 中的中文字符编码不一致（未保存为 UTF-8 BOM）。
-
-**解决**：构建脚本中统一使用英文输出，或确保文件编码为 UTF-8 with BOM。
-
 ## JS ↔ WASM 数据交换流程
 
 ```
@@ -81,8 +118,8 @@ JS 侧                              WASM 侧
 ──────────────────────────────     ─────────────────
 Float64Array 数据
   │
-  ├─ _malloc(n * 8) ────────────→ 分配堆内存
-  ├─ setValue(ptr, val) ────────→ 逐元素写入
+  ├─ _malloc(n * 8) ───────────→ 分配堆内存
+  ├─ setValue(ptr, val) ───────→ 逐元素写入
   │
   ├─ ccall('solve_xxx', ...) ───→ C 函数处理
   │                                  ├─ 加载网格
@@ -124,16 +161,56 @@ EMSCRIPTEN_KEEPALIVE void    xxx_dispose() { delete g_mesh; g_uv.clear(); }
 - 全局变量避免栈上返回悬空指针
 - `_malloc` 分配的内存必须由 JS 侧 `_free` 释放
 
-## 输出文件
+## 遇到的问题 & 解决方案
 
-编译后 `assets/wasm/` 目录结构：
+### 1. `_malloc` / `_free` 导出失败
 
 ```
-assets/wasm/
-├── lscm_solver.js          # LSCM    JS 胶水代码
-├── lscm_solver.wasm        # LSCM    WASM 二进制
-├── bd_lscm_solver.js       # BD-LSCM JS 胶水代码
-├── bd_lscm_solver.wasm     # BD-LSCM WASM 二进制
-├── tutte_arap_solver.js    # Tutte+ARAP JS 胶水代码
-└── tutte_arap_solver.wasm  # Tutte+ARAP WASM 二进制
+error: undefined exported symbol: "_malloc" in EXPORTED_RUNTIME_METHODS
+error: undefined exported symbol: "_free" in EXPORTED_RUNTIME_METHODS
+```
+
+**原因**：新版本 Emscripten（3.x+）中 `_malloc`/`_free` 不属于 `EXPORTED_RUNTIME_METHODS`。
+
+**解决**：移到 `EXPORTED_FUNCTIONS` 中（Makefile 中已正确处理）。
+
+### 2. `getValue` / `setValue` 不可用
+
+JS 侧报 `wasmModule.getValue is not a function`。
+
+**解决**：在 `EXPORTED_RUNTIME_METHODS` 中显式声明：
+```bash
+-s "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','getValue','setValue']"
+```
+
+### 3. macOS 上 .ps1 / .bat 脚本不可用
+
+旧脚本为 Windows/PowerShell 编写，macOS 无法直接运行。已统一改为 Makefile。
+
+## 文件组织结构
+
+```
+cpp/conformal-parameterization/
+├── Makefile              # ← 统一构建脚本（本文件）
+├── WASM_BUILD_GUIDE.md   # ← 本文档
+│
+├── wasm_main.cpp          # LSCM 入口
+├── wasm_tutte_arap.cpp   # Tutte+ARAP 入口
+├── wasm_cetm.cpp         # CETM 入口
+├── wasm_circle_patterns.cpp  # Circle Patterns 入口
+├── wasm_holo.cpp         # Holomorphic 1-Form 入口
+├── wasm_miq.cpp          # MIQ Quad 入口
+├── wasm_quadcover.cpp    # QuadCover 入口
+├── wasm_ricci.cpp        # Ricci Flow 入口
+├── wasm_bff.cpp          # BFF 入口
+├── wasm_bd_lscm.cpp      # BD-LSCM 入口
+├── principal_curvature_wasm.cpp  # Principal Curvature 入口
+│
+├── Lscm.cpp / .h         # 各算法实现
+├── Cetm.cpp / .h
+├── ...
+├── Mesh.cpp / .h          # 公共网格数据结构
+├── Parameterization.cpp/.h
+├── bounded_distortion.h   # BD-LSCM 算法
+└── ...
 ```

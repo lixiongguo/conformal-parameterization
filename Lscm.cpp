@@ -1,5 +1,5 @@
 #include "Lscm.h"
-#include <eigen/SparseCholesky>
+#include <Eigen/SparseCholesky>
 
 Lscm::Lscm(Mesh& mesh0):
 Parameterization(mesh0)

@@ -5,7 +5,7 @@
 #include "MosekStub.h"
 #endif
 #include <deque>
-#include <eigen/SparseCholesky>
+#include <Eigen/SparseCholesky>
 #define beta 0.9
 #define EPSILON 1e-9
 #define MAX_ITERS 10000
