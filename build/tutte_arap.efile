@@ -1,0 +1,1 @@
+["_malloc","_free","_solve_tutte_circle","_solve_tutte_square","_solve_arap","_get_ta_uv_result","_get_ta_uv_result_size","_get_ta_last_time_ms","_compute_qc_error","_load_mesh_with_uv","_get_qc_errors","_get_qc_errors_size","_get_qc_colors","_get_qc_colors_size","_ta_dispose"]

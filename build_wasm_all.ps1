@@ -97,7 +97,7 @@ function Write-Efile($name, $funcs) {
 }
 
 # ==================== Helper: build one target ====================
-function Build-Target($name, $srcs, $exportName, $funcs, $output, $extraFlags) {
+function Build-Target($name, $srcs, $exportName, $funcs, $output, $extraFlags, $customInc) {
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host "Building: $name" -ForegroundColor Cyan
@@ -105,10 +105,11 @@ function Build-Target($name, $srcs, $exportName, $funcs, $output, $extraFlags) {
     Write-Host "========================================" -ForegroundColor Cyan
 
     $efile = Write-Efile $name $funcs
+    $useInc = if ($customInc) { $customInc } else { $incFlags }
 
     $allFlags = @(
         $cxxFlags
-        $incFlags
+        $useInc
         $commonEmFlags
         "-s EXPORT_NAME=""$exportName"""
         "-s EXPORTED_FUNCTIONS=$efile"
@@ -269,7 +270,8 @@ Build-One "Principal Curvature" ((ShouldBuild "principal_curvature") -and (-not 
         "PrincipalCurvatureSolver" `
         @("_malloc","_free","_compute_principal_curvature","_get_result_buffer_size") `
         "$outDir\principal_curvature.js" `
-        @("--bind")
+        @("--bind") `
+        $pcIncFlags
 }
 
 # ==================== Summary ====================
