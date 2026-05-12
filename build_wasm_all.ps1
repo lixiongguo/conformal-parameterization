@@ -23,7 +23,7 @@ $srcDir        = "c:\Users\lixio\OneDrive\Desktop\MyDoc\lixiongguo.github.io\cpp
 $outDir        = "c:\Users\lixio\OneDrive\Desktop\MyDoc\lixiongguo.github.io\assets\wasm"
 $buildDir      = "$srcDir\build"
 $eigenInc      = "$srcDir\..\deps\eigen-3.4.0"
-$libiglInc     = "$srcDir\..\Libigl-Discrete-Geometry\libigl\include"
+$libiglInc     = "$srcDir\..\deps\Libigl-Discrete-Geometry\libigl\include"
 $glmInc        = "$srcDir\..\deps\glm"
 $mosekInc      = "$srcDir\..\deps\mosek"
 
@@ -268,9 +268,23 @@ Build-One "Principal Curvature" ((ShouldBuild "principal_curvature") -and (-not 
     Build-Target "principal_curvature" `
         "principal_curvature_wasm.cpp" `
         "PrincipalCurvatureSolver" `
-        @("_malloc","_free","_compute_principal_curvature","_get_result_buffer_size") `
+        @("_malloc","_free","_compute_principal_curvature","_get_pc_pd1","_get_pc_pd2","_get_pc_pv1","_get_pc_pv2","_get_pc_num_verts","_pc_dispose") `
         "$outDir\principal_curvature.js" `
-        @("--bind") `
+        @("-Wno-deprecated-declarations") `
+        $pcIncFlags
+}
+
+# ------------------------------------------------------------------
+# 12. Gaussian Curvature (requires libigl)
+# ------------------------------------------------------------------
+Build-One "Gauss Curvature" ((ShouldBuild "gauss_curvature") -and (-not $SkipLibigl) -and (Test-Path $libiglInc)) {
+    $pcIncFlags = "-I$eigenInc -I$libiglInc -I."
+    Build-Target "gauss_curvature" `
+        "gauss_curvature_wasm.cpp" `
+        "GaussCurvatureSolver" `
+        @("_malloc","_free","_compute_gauss_curvature","_get_gc_result","_get_gc_result_size","_gc_dispose") `
+        "$outDir\gauss_curvature.js" `
+        $null `
         $pcIncFlags
 }
 
