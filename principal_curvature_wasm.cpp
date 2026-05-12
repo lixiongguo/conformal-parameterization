@@ -12,8 +12,33 @@
  */
 #include <emscripten.h>
 #include <Eigen/Dense>
+#include <Eigen/SVD>
+
+// The vendored libigl headers use a few Eigen 3.3+/3.4 names while this
+// repository currently vendors Eigen 3.2.x under the eigen-3.4.0 directory.
+// Keep the shim local to this WASM target so other builds stay untouched.
+#if !EIGEN_VERSION_AT_LEAST(3, 3, 0)
+namespace Eigen {
+    typedef DenseIndex Index;
+    static const int all = 0;
+
+    template <typename MatrixType>
+    class CompleteOrthogonalDecomposition {
+    public:
+        explicit CompleteOrthogonalDecomposition(const MatrixType& matrix) : matrix_(matrix) {}
+
+        template <typename Rhs>
+        auto solve(const Rhs& rhs) const {
+            return matrix_.jacobiSvd(ComputeThinU | ComputeThinV).solve(rhs);
+        }
+
+    private:
+        MatrixType matrix_;
+    };
+}
+#endif
+
 #include <igl/principal_curvature.h>
-#include <igl/average_onto_faces.h>
 #include <vector>
 
 static std::vector<double> g_pd1, g_pd2, g_pv1, g_pv2;
@@ -27,19 +52,14 @@ int compute_principal_curvature(double* V_ptr, int V_rows, int* F_ptr, int F_row
     if (radius < 1) radius = 5;
 
     try {
-        Eigen::Map<Eigen::MatrixXd> V(V_ptr, V_rows, 3);
-        Eigen::Map<Eigen::MatrixXi> F(F_ptr, F_rows, 3);
+        Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>> V_map(V_ptr, V_rows, 3);
+        Eigen::Map<const Eigen::Matrix<int, Eigen::Dynamic, 3, Eigen::RowMajor>> F_map(F_ptr, F_rows, 3);
+        Eigen::MatrixXd V = V_map;
+        Eigen::MatrixXi F = F_map;
 
         Eigen::MatrixXd PD1, PD2;
         Eigen::VectorXd PV1, PV2;
         igl::principal_curvature(V, F, PD1, PD2, PV1, PV2, radius, true);
-        // Average onto faces for better visualization
-        Eigen::MatrixXd PD1f, PD2f;
-        Eigen::VectorXd PV1f, PV2f;
-        igl::average_onto_faces(F, PD1, PD1f);
-        igl::average_onto_faces(F, PD2, PD2f);
-        igl::average_onto_faces(F, PV1, PV1f);
-        igl::average_onto_faces(F, PV2, PV2f);
 
         g_num_verts = V_rows;
         g_pd1.resize(V_rows * 3);
