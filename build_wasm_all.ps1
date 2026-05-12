@@ -223,7 +223,7 @@ Build-One "QuadCover" (ShouldBuild "quadcover") {
     Build-Target "quadcover" `
         "wasm_quadcover.cpp QuadCover.cpp $meshSrcs" `
         "QuadCoverSolver" `
-        @("_malloc","_free","_solve_qc","_solve_qc_with_field","_get_qc_uv_result","_get_qc_uv_result_size","_get_qc_last_time_ms","_qc_dispose") `
+        @("_malloc","_free","_solve_qc","_solve_qc_with_field","_solve_qc_full_with_field","_get_qc_uv_result","_get_qc_uv_result_size","_get_qc_last_time_ms","_qc_dispose") `
         "$outDir\quadcover_solver.js"
 }
 

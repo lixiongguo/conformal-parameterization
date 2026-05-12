@@ -20,6 +20,7 @@ class QuadCover : public Parameterization {
 public:
     QuadCover(Mesh& mesh0);
     void parameterize() override;
+    bool parameterizeFull();
     void setFaceDirections(const Eigen::MatrixXd& dirs);
     
 protected:
@@ -40,6 +41,16 @@ protected:
     
     // Phase 4: Poisson solve for UV (Hodge decomposition)
     void solvePoisson();
+
+    // Full QuadCover path: transport-aware matching, explicit 4-sheet
+    // branch cover, then least-squares integration on the cover.
+    void computeTransportMatching();
+    bool buildBranchCoverAndIntegrate();
+    bool solveCoverPoisson(const Eigen::MatrixXd& coverPos,
+                           const Eigen::MatrixXi& coverFaces,
+                           const Eigen::MatrixXd& coverD1,
+                           const Eigen::MatrixXd& coverD2,
+                           Eigen::MatrixXd& coverUV);
     
     // helpers
     void buildLocalFrame(const Eigen::Vector3d& n, Eigen::Vector3d& t1, Eigen::Vector3d& t2);

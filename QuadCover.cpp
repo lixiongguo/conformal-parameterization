@@ -1,8 +1,36 @@
 #include "QuadCover.h"
 #include <map>
 #include <algorithm>
+#include <queue>
+#include <Eigen/IterativeLinearSolvers>
 
 using namespace Eigen;
+
+namespace {
+int mod4(int x) {
+    int r = x % 4;
+    return r < 0 ? r + 4 : r;
+}
+
+struct DisjointSet {
+    std::vector<int> parent, rank;
+    explicit DisjointSet(int n = 0) : parent(n), rank(n, 0) {
+        for (int i = 0; i < n; ++i) parent[i] = i;
+    }
+    int find(int x) {
+        if (parent[x] == x) return x;
+        parent[x] = find(parent[x]);
+        return parent[x];
+    }
+    void unite(int a, int b) {
+        a = find(a); b = find(b);
+        if (a == b) return;
+        if (rank[a] < rank[b]) std::swap(a, b);
+        parent[b] = a;
+        if (rank[a] == rank[b]) rank[a]++;
+    }
+};
+}
 
 QuadCover::QuadCover(Mesh& mesh0): Parameterization(mesh0), hasExternalFaceDirs(false) {}
 
@@ -263,13 +291,61 @@ void QuadCover::computeMatching() {
 
 void QuadCover::computeLayerShift() {
     layerShift = Eigen::VectorXd::Zero(nVerts);
-    for (int ei = 0; ei < nEdges; ei++) {
-        auto& e = edgeList[ei];
-        if (e.f1 < 0 || e.f2 < 0) continue;
-        layerShift(e.v1) += matching[ei];
-        layerShift(e.v2) += matching[ei];
+
+    std::vector<std::vector<int>> incidentFaces(nVerts);
+    std::vector<char> boundaryVertex(nVerts, 0);
+    for (int fi = 0; fi < nFaces; ++fi) {
+        for (int k = 0; k < 3; ++k) incidentFaces[faces[fi * 3 + k]].push_back(fi);
     }
-    layerShift /= 4.0;
+    for (int ei = 0; ei < nEdges; ++ei) {
+        const Edge& e = edgeList[ei];
+        if (e.f1 < 0 || e.f2 < 0) {
+            boundaryVertex[e.v1] = 1;
+            boundaryVertex[e.v2] = 1;
+        }
+    }
+
+    auto signedMatch = [&](int fromFace, int toFace) {
+        for (int ei = 0; ei < nEdges; ++ei) {
+            const Edge& e = edgeList[ei];
+            if (e.f1 == fromFace && e.f2 == toFace) return matching[ei];
+            if (e.f2 == fromFace && e.f1 == toFace) return -matching[ei];
+        }
+        return 0;
+    };
+
+    for (int v = 0; v < nVerts; ++v) {
+        if (boundaryVertex[v] || incidentFaces[v].size() < 3) continue;
+
+        Eigen::Vector3d n = vertexNormals.row(v);
+        if (n.norm() < 1e-12) continue;
+        n.normalize();
+        Eigen::Vector3d t1, t2;
+        buildLocalFrame(n, t1, t2);
+        const Eigen::Vector3d pv = vertPos.row(v);
+
+        std::vector<std::pair<double, int>> ordered;
+        for (int fi : incidentFaces[v]) {
+            Eigen::Vector3d c(0, 0, 0);
+            for (int k = 0; k < 3; ++k) c += vertPos.row(faces[fi * 3 + k]);
+            c = c / 3.0 - pv;
+            c -= c.dot(n) * n;
+            if (c.norm() < 1e-12) continue;
+            ordered.push_back(std::make_pair(std::atan2(c.dot(t2), c.dot(t1)), fi));
+        }
+        if (ordered.size() < 3) continue;
+        std::sort(ordered.begin(), ordered.end());
+
+        int holonomy = 0;
+        for (size_t i = 0; i < ordered.size(); ++i) {
+            int f0 = ordered[i].second;
+            int f1 = ordered[(i + 1) % ordered.size()].second;
+            holonomy += signedMatch(f0, f1);
+        }
+        int h = mod4(holonomy);
+        if (h > 2) h -= 4;
+        layerShift(v) = (double)h / 4.0;
+    }
 }
 
 // ============================================================
@@ -430,6 +506,287 @@ void QuadCover::solvePoisson() {
 }
 
 // ============================================================
+// Full QuadCover: matching via shared-edge parallel transport
+// ============================================================
+
+void QuadCover::computeTransportMatching() {
+    matching.resize(nEdges);
+    matching.setZero();
+
+    for (int eIdx = 0; eIdx < nEdges; eIdx++) {
+        Edge& e = edgeList[eIdx];
+        if (e.f1 < 0 || e.f2 < 0) {
+            matching[eIdx] = 0;
+            continue;
+        }
+
+        Eigen::Vector3d edgeDir = vertPos.row(e.v2) - vertPos.row(e.v1);
+        double elen = edgeDir.norm();
+        if (elen < 1e-12) {
+            matching[eIdx] = 0;
+            continue;
+        }
+        edgeDir /= elen;
+
+        auto faceAngle = [&](int fi) {
+            Eigen::Vector3d n = faceNormals.row(fi).normalized();
+            Eigen::Vector3d x = edgeDir - edgeDir.dot(n) * n;
+            double xlen = x.norm();
+            if (xlen < 1e-12) {
+                Eigen::Vector3d yFallback;
+                buildLocalFrame(n, x, yFallback);
+            } else {
+                x /= xlen;
+            }
+            Eigen::Vector3d y = n.cross(x).normalized();
+
+            Eigen::Vector3d d = faceDirs.row(fi);
+            d -= d.dot(n) * n;
+            double dlen = d.norm();
+            if (dlen < 1e-12) d = x;
+            else d /= dlen;
+            return std::atan2(d.dot(y), d.dot(x));
+        };
+
+        const double a1 = faceAngle(e.f1);
+        const double a2 = faceAngle(e.f2);
+        int r = (int)std::floor((a1 - a2) / (0.5 * M_PI) + 0.5);
+        matching[eIdx] = mod4(r);
+    }
+}
+
+bool QuadCover::solveCoverPoisson(const Eigen::MatrixXd& coverPos,
+                                  const Eigen::MatrixXi& coverFaces,
+                                  const Eigen::MatrixXd& coverD1,
+                                  const Eigen::MatrixXd& coverD2,
+                                  Eigen::MatrixXd& coverUV) {
+    const int nV = (int)coverPos.rows();
+    const int nF = (int)coverFaces.rows();
+    if (nV < 3 || nF < 1) return false;
+
+    std::vector<Eigen::Triplet<double>> trips;
+    Eigen::VectorXd diag = Eigen::VectorXd::Zero(nV);
+    Eigen::VectorXd rhsU = Eigen::VectorXd::Zero(nV);
+    Eigen::VectorXd rhsV = Eigen::VectorXd::Zero(nV);
+    std::vector<std::vector<int>> adj(nV);
+
+    auto addWeight = [&](int i, int j, double w) {
+        if (!std::isfinite(w) || w <= 0.0) return;
+        diag(i) += w;
+        diag(j) += w;
+        trips.push_back(Eigen::Triplet<double>(i, j, -w));
+        trips.push_back(Eigen::Triplet<double>(j, i, -w));
+        adj[i].push_back(j);
+        adj[j].push_back(i);
+    };
+
+    for (int fi = 0; fi < nF; ++fi) {
+        const int i0 = coverFaces(fi, 0), i1 = coverFaces(fi, 1), i2 = coverFaces(fi, 2);
+        if (i0 < 0 || i0 >= nV || i1 < 0 || i1 >= nV || i2 < 0 || i2 >= nV) return false;
+        if (i0 == i1 || i1 == i2 || i2 == i0) continue;
+        const Eigen::Vector3d p0 = coverPos.row(i0);
+        const Eigen::Vector3d p1 = coverPos.row(i1);
+        const Eigen::Vector3d p2 = coverPos.row(i2);
+        Eigen::Vector3d n = (p1 - p0).cross(p2 - p0);
+        const double dblArea = n.norm();
+        if (dblArea < 1e-14) continue;
+        n /= dblArea;
+        const double area = 0.5 * dblArea;
+
+        const double c0 = cotan(p1, p0, p2);
+        const double c1 = cotan(p2, p1, p0);
+        const double c2 = cotan(p0, p2, p1);
+        addWeight(i1, i2, 0.5 * c0);
+        addWeight(i2, i0, 0.5 * c1);
+        addWeight(i0, i1, 0.5 * c2);
+
+        const Eigen::Vector3d grad0 = n.cross(p2 - p1) / dblArea;
+        const Eigen::Vector3d grad1 = n.cross(p0 - p2) / dblArea;
+        const Eigen::Vector3d grad2 = n.cross(p1 - p0) / dblArea;
+        const Eigen::Vector3d xu = coverD1.row(fi);
+        const Eigen::Vector3d xv = coverD2.row(fi);
+
+        rhsU(i0) += area * xu.dot(grad0);
+        rhsU(i1) += area * xu.dot(grad1);
+        rhsU(i2) += area * xu.dot(grad2);
+        rhsV(i0) += area * xv.dot(grad0);
+        rhsV(i1) += area * xv.dot(grad1);
+        rhsV(i2) += area * xv.dot(grad2);
+    }
+
+    for (int i = 0; i < nV; ++i) {
+        trips.push_back(Eigen::Triplet<double>(i, i, diag(i) + 1e-8));
+    }
+    Eigen::SparseMatrix<double> L(nV, nV);
+    L.setFromTriplets(trips.begin(), trips.end());
+
+    // Anchor one vertex per connected component to remove the constant nullspace.
+    std::vector<char> seen(nV, 0);
+    for (int seed = 0; seed < nV; ++seed) {
+        if (seen[seed]) continue;
+        std::queue<int> q;
+        q.push(seed);
+        seen[seed] = 1;
+        L.coeffRef(seed, seed) += 1e8;
+        rhsU(seed) = 0.0;
+        rhsV(seed) = 0.0;
+        while (!q.empty()) {
+            int v = q.front();
+            q.pop();
+            for (int nb : adj[v]) {
+                if (!seen[nb]) {
+                    seen[nb] = 1;
+                    q.push(nb);
+                }
+            }
+        }
+    }
+    L.makeCompressed();
+
+    Eigen::ConjugateGradient<Eigen::SparseMatrix<double>, Eigen::Lower | Eigen::Upper,
+                             Eigen::DiagonalPreconditioner<double>> solver;
+    solver.setMaxIterations(std::max(200, nV * 2));
+    solver.setTolerance(1e-8);
+    solver.compute(L);
+    if (solver.info() != Eigen::Success) return false;
+
+    Eigen::VectorXd u = solver.solve(rhsU);
+    Eigen::VectorXd v = solver.solve(rhsV);
+    if (solver.info() != Eigen::Success) return false;
+
+    coverUV.resize(nV, 2);
+    coverUV.col(0) = u;
+    coverUV.col(1) = v;
+    return true;
+}
+
+bool QuadCover::buildBranchCoverAndIntegrate() {
+    const int sheets = 4;
+    const int rawCoverCorners = nFaces * sheets * 3;
+    DisjointSet dsu(rawCoverCorners);
+
+    auto cornerId = [&](int fi, int local, int s) {
+        return (fi * sheets + mod4(s)) * 3 + local;
+    };
+    auto localCorner = [&](int fi, int vertex) {
+        for (int k = 0; k < 3; ++k) {
+            if (faces[fi * 3 + k] == vertex) return k;
+        }
+        return -1;
+    };
+
+    // Glue face-corner copies according to matching. Around a vertex, the
+    // accumulated transition is exactly layerShift/holonomy: ordinary vertices
+    // keep four independent preimages, while non-zero layerShift vertices
+    // become branch points where the sheet cycle does not close on itself.
+    for (int ei = 0; ei < nEdges; ++ei) {
+        const Edge& e = edgeList[ei];
+        if (e.f1 < 0 || e.f2 < 0) continue;
+        const int r = matching[ei];
+        const int f1v1 = localCorner(e.f1, e.v1);
+        const int f1v2 = localCorner(e.f1, e.v2);
+        const int f2v1 = localCorner(e.f2, e.v1);
+        const int f2v2 = localCorner(e.f2, e.v2);
+        if (f1v1 < 0 || f1v2 < 0 || f2v1 < 0 || f2v2 < 0) return false;
+
+        for (int s = 0; s < sheets; ++s) {
+            const int t = mod4(s + r);
+            dsu.unite(cornerId(e.f1, f1v1, s), cornerId(e.f2, f2v1, t));
+            dsu.unite(cornerId(e.f1, f1v2, s), cornerId(e.f2, f2v2, t));
+        }
+    }
+
+    std::map<int, int> repToIndex;
+    std::vector<int> coverIndex(rawCoverCorners, -1);
+    std::vector<Eigen::Vector3d> cpos;
+    std::vector<std::vector<int>> baseToCover(nVerts);
+    std::vector<int> baseSheet0(nVerts, -1);
+
+    for (int fi = 0; fi < nFaces; ++fi) {
+        for (int s = 0; s < sheets; ++s) {
+            for (int k = 0; k < 3; ++k) {
+                const int raw = cornerId(fi, k, s);
+                const int v = faces[fi * 3 + k];
+                const int rep = dsu.find(raw);
+                auto it = repToIndex.find(rep);
+                if (it == repToIndex.end()) {
+                    const int idx = (int)cpos.size();
+                    repToIndex[rep] = idx;
+                    coverIndex[raw] = idx;
+                    cpos.push_back(vertPos.row(v));
+                } else {
+                    coverIndex[raw] = it->second;
+                }
+                if (std::find(baseToCover[v].begin(), baseToCover[v].end(), coverIndex[raw]) == baseToCover[v].end()) {
+                    baseToCover[v].push_back(coverIndex[raw]);
+                }
+                if (s == 0 && baseSheet0[v] < 0) baseSheet0[v] = coverIndex[raw];
+            }
+        }
+    }
+
+    Eigen::MatrixXd coverPos((int)cpos.size(), 3);
+    for (int i = 0; i < (int)cpos.size(); ++i) coverPos.row(i) = cpos[i];
+
+    Eigen::MatrixXi coverFaces(nFaces * sheets, 3);
+    Eigen::MatrixXd coverD1(nFaces * sheets, 3), coverD2(nFaces * sheets, 3);
+    for (int fi = 0; fi < nFaces; ++fi) {
+        Eigen::Vector3d n = faceNormals.row(fi).normalized();
+        Eigen::Vector3d base = faceDirs.row(fi);
+        base -= base.dot(n) * n;
+        double blen = base.norm();
+        if (blen < 1e-12) {
+            Eigen::Vector3d t1, t2;
+            buildLocalFrame(n, t1, t2);
+            base = t1;
+        } else {
+            base /= blen;
+        }
+        Eigen::Vector3d ortho = n.cross(base).normalized();
+
+        for (int s = 0; s < sheets; ++s) {
+            const int row = fi * sheets + s;
+            coverFaces(row, 0) = coverIndex[cornerId(fi, 0, s)];
+            coverFaces(row, 1) = coverIndex[cornerId(fi, 1, s)];
+            coverFaces(row, 2) = coverIndex[cornerId(fi, 2, s)];
+
+            const double a = s * 0.5 * M_PI;
+            Eigen::Vector3d d1 = std::cos(a) * base + std::sin(a) * ortho;
+            Eigen::Vector3d d2 = -std::sin(a) * base + std::cos(a) * ortho;
+            coverD1.row(row) = d1.normalized();
+            coverD2.row(row) = d2.normalized();
+        }
+    }
+
+    Eigen::MatrixXd coverUV;
+    if (!solveCoverPoisson(coverPos, coverFaces, coverD1, coverD2, coverUV)) return false;
+
+    UV.resize(nVerts, 2);
+    for (int v = 0; v < nVerts; ++v) {
+        const bool branchVertex = std::abs(layerShift(v)) > 1e-6;
+        if (branchVertex && !baseToCover[v].empty()) {
+            Eigen::RowVector2d avg(0.0, 0.0);
+            for (int ci : baseToCover[v]) avg += coverUV.row(ci);
+            UV.row(v) = avg / (double)baseToCover[v].size();
+        } else {
+            int ci = baseSheet0[v];
+            if (ci < 0 && !baseToCover[v].empty()) ci = baseToCover[v][0];
+            if (ci < 0) return false;
+            UV.row(v) = coverUV.row(ci);
+        }
+    }
+
+    double uMin = UV.col(0).minCoeff(), uMax = UV.col(0).maxCoeff();
+    double vMin = UV.col(1).minCoeff(), vMax = UV.col(1).maxCoeff();
+    const double scale = std::max(uMax - uMin, vMax - vMin);
+    if (scale > 1e-12) {
+        UV.col(0) = (UV.col(0).array() - uMin) / scale;
+        UV.col(1) = (UV.col(1).array() - vMin) / scale;
+    }
+    return true;
+}
+
+// ============================================================
 // Main entry point
 // ============================================================
 
@@ -497,4 +854,62 @@ void QuadCover::parameterize() {
     for (VertexIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
         v->uv = Eigen::Vector2d(UV(v->index, 0), UV(v->index, 1));
     }
+}
+
+bool QuadCover::parameterizeFull() {
+    nVerts = (int)mesh.vertices.size();
+    nFaces = 0;
+    for (FaceCIter f = mesh.faces.begin(); f != mesh.faces.end(); f++)
+        if (!f->isBoundary()) nFaces++;
+
+    vertPos.resize(nVerts, 3);
+    faces.resize(nFaces * 3);
+
+    for (VertexCIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
+        vertPos.row(v->index) = v->position;
+    }
+
+    int fi = 0;
+    for (FaceCIter f = mesh.faces.begin(); f != mesh.faces.end(); f++) {
+        if (!f->isBoundary()) {
+            faces[fi * 3] = f->he->vertex->index;
+            faces[fi * 3 + 1] = f->he->next->vertex->index;
+            faces[fi * 3 + 2] = f->he->next->next->vertex->index;
+            fi++;
+        }
+    }
+
+    std::map<std::pair<int, int>, int> edgeMap;
+    edgeList.clear();
+    for (int fi2 = 0; fi2 < nFaces; fi2++) {
+        for (int k = 0; k < 3; k++) {
+            int v1 = faces[fi2 * 3 + k], v2 = faces[fi2 * 3 + (k + 1) % 3];
+            if (v1 > v2) std::swap(v1, v2);
+            auto key = std::make_pair(v1, v2);
+            auto it = edgeMap.find(key);
+            if (it == edgeMap.end()) {
+                edgeMap[key] = (int)edgeList.size();
+                Edge e; e.v1 = v1; e.v2 = v2; e.f1 = fi2; e.f2 = -1;
+                edgeList.push_back(e);
+            } else {
+                edgeList[it->second].f2 = fi2;
+            }
+        }
+    }
+    nEdges = (int)edgeList.size();
+
+    computeVertexNormals();
+    estimatePrincipalCurvature();
+    computeTransportMatching();
+    computeLayerShift();
+
+    if (!buildBranchCoverAndIntegrate()) {
+        UV = Eigen::MatrixXd::Zero(nVerts, 2);
+        return false;
+    }
+
+    for (VertexIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
+        v->uv = Eigen::Vector2d(UV(v->index, 0), UV(v->index, 1));
+    }
+    return true;
 }

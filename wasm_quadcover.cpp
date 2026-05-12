@@ -34,9 +34,8 @@ static bool loadMesh(const double* pos, int posLen, const int* faces, int faceLe
     return true;
 }
 
-extern "C" {
-EMSCRIPTEN_KEEPALIVE
-int solve_qc_with_field(double* posPtr, int posLen, int* facePtr, int faceLen, double* dirPtr, int dirLen) {
+static int solveQuadCoverImpl(double* posPtr, int posLen, int* facePtr, int faceLen,
+                              double* dirPtr, int dirLen, bool full) {
     if(!posPtr||!facePtr||posLen<9||faceLen<3)return -1;
     if(!loadMesh(posPtr,posLen,facePtr,faceLen))return -1;
     auto t0=std::chrono::high_resolution_clock::now();
@@ -50,7 +49,9 @@ int solve_qc_with_field(double* posPtr, int posLen, int* facePtr, int faceLen, d
         }
         qc.setFaceDirections(dirs);
     }
-    qc.parameterize();
+    if(full){
+        if(!qc.parameterizeFull())return -2;
+    }else qc.parameterize();
     auto t1=std::chrono::high_resolution_clock::now();
     g_lastTimeMs=std::chrono::duration<double,std::milli>(t1-t0).count();
     g_uv_result.clear();g_uv_result.reserve(g_mesh->vertices.size()*2);
@@ -67,6 +68,16 @@ int solve_qc_with_field(double* posPtr, int posLen, int* facePtr, int faceLen, d
         g_uv_result.push_back((v->uv.y()-mv)/rv);
     }
     return 0;
+}
+
+extern "C" {
+EMSCRIPTEN_KEEPALIVE
+int solve_qc_with_field(double* posPtr, int posLen, int* facePtr, int faceLen, double* dirPtr, int dirLen) {
+    return solveQuadCoverImpl(posPtr,posLen,facePtr,faceLen,dirPtr,dirLen,false);
+}
+EMSCRIPTEN_KEEPALIVE
+int solve_qc_full_with_field(double* posPtr, int posLen, int* facePtr, int faceLen, double* dirPtr, int dirLen) {
+    return solveQuadCoverImpl(posPtr,posLen,facePtr,faceLen,dirPtr,dirLen,true);
 }
 EMSCRIPTEN_KEEPALIVE
 int solve_qc(double* posPtr, int posLen, int* facePtr, int faceLen) {
