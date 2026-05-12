@@ -176,6 +176,9 @@ void CirclePatternsWasm::computeAnglesAndEdgeLengths(Eigen::VectorXd& lengths)
 {
     for (EdgeCIter e = mesh.edges.begin(); e != mesh.edges.end(); e++) {
         HalfEdgeCIter h1 = e->he;
+        if (e->isBoundary() && h1->onBoundary) {
+            h1 = h1->flip;
+        }
         
         if (e->isBoundary()) {
             angles[h1->index] = M_PI - thetas[e->index];

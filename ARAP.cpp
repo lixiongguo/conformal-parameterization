@@ -167,19 +167,35 @@ void ARAP::globalStep()
             int vi = vIdx[a];
             int vj = vIdx[b_idx];
             
-            // u_i - u_j contribution to Laplacian
+            // Normal equations for ||(u_i - u_j) - R(x_i - x_j)||^2.
+            // Both endpoints of the edge must contribute with opposite RHS signs.
             if (!isBoundary[vi]) {
                 int ri = interiorIdx[vi];
                 triplets.push_back(Eigen::Triplet<double>(ri, ri, w));
+                bx(ri) += w * rotDx.x();
+                by(ri) += w * rotDx.y();
                 
                 if (isBoundary[vj]) {
-                    bx(ri) += w * (mesh.vertices[vj].uv.x() + rotDx.x());
-                    by(ri) += w * (mesh.vertices[vj].uv.y() + rotDx.y());
+                    bx(ri) += w * mesh.vertices[vj].uv.x();
+                    by(ri) += w * mesh.vertices[vj].uv.y();
                 } else {
                     int cj = interiorIdx[vj];
                     triplets.push_back(Eigen::Triplet<double>(ri, cj, -w));
-                    bx(ri) += w * rotDx.x();
-                    by(ri) += w * rotDx.y();
+                }
+            }
+
+            if (!isBoundary[vj]) {
+                int rj = interiorIdx[vj];
+                triplets.push_back(Eigen::Triplet<double>(rj, rj, w));
+                bx(rj) -= w * rotDx.x();
+                by(rj) -= w * rotDx.y();
+                
+                if (isBoundary[vi]) {
+                    bx(rj) += w * mesh.vertices[vi].uv.x();
+                    by(rj) += w * mesh.vertices[vi].uv.y();
+                } else {
+                    int ci = interiorIdx[vi];
+                    triplets.push_back(Eigen::Triplet<double>(rj, ci, -w));
                 }
             }
         }
