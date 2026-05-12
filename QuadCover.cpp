@@ -4,7 +4,12 @@
 
 using namespace Eigen;
 
-QuadCover::QuadCover(Mesh& mesh0): Parameterization(mesh0) {}
+QuadCover::QuadCover(Mesh& mesh0): Parameterization(mesh0), hasExternalFaceDirs(false) {}
+
+void QuadCover::setFaceDirections(const Eigen::MatrixXd& dirs) {
+    externalFaceDirs = dirs;
+    hasExternalFaceDirs = (dirs.cols() == 3 && dirs.rows() > 0);
+}
 
 // ============================================================
 // Helpers
@@ -107,6 +112,20 @@ void QuadCover::estimatePrincipalCurvature() {
         double area = 0.5 * fn.norm();
         fn /= std::max(2.0 * area, 1e-12);
         faceNormals.row(fi) = fn;
+
+        if (hasExternalFaceDirs && externalFaceDirs.rows() == nFaces) {
+            Eigen::Vector3d dir = externalFaceDirs.row(fi);
+            dir -= dir.dot(fn) * fn;
+            double dlen = dir.norm();
+            if (dlen > 1e-12) {
+                faceDirs.row(fi) = dir / dlen;
+            } else {
+                Eigen::Vector3d t1, t2;
+                buildLocalFrame(fn, t1, t2);
+                faceDirs.row(fi) = t1;
+            }
+            continue;
+        }
         
         // 2. Tangent plane local frame {t1, t2}
         Eigen::Vector3d t1, t2;

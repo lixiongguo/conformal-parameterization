@@ -20,6 +20,7 @@ class QuadCover : public Parameterization {
 public:
     QuadCover(Mesh& mesh0);
     void parameterize() override;
+    void setFaceDirections(const Eigen::MatrixXd& dirs);
     
 protected:
     // Phase 0: Compute vertex normals (area-weighted face normals)
@@ -53,7 +54,9 @@ protected:
     Eigen::MatrixXd vertexNormals;    // per-vertex normal (nVerts × 3), area-weighted
     Eigen::MatrixXd faceNormals;      // per-face normal (nFaces × 3)
     Eigen::MatrixXd faceDirs;         // per-face reference direction (nFaces × 3)
+    Eigen::MatrixXd externalFaceDirs; // optional input frame field directions
     Eigen::MatrixXd faceD1, faceD2;   // covering field: two orthogonal dirs per face
+    bool hasExternalFaceDirs;
     
     Eigen::VectorXi matching;         // r_ij per edge, resized to nEdges
     Eigen::VectorXd layerShift;       // ls(v) per vertex
