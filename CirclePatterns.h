@@ -22,7 +22,7 @@ protected:
     void setThetas();
     
     // compute angles
-    bool computeAngles();
+    virtual bool computeAngles();
     
     // computes energy, gradient and hessian
     void computeEnergy(double& energy, const Eigen::VectorXd& rho);
