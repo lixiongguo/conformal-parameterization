@@ -1,5 +1,6 @@
 #include "Mesh.h"
 #include "MeshIO.h"
+#include <stack>
 // #include "Scp.h"
 #include "Lscm.h"
 // #include "CirclePatterns.h"
@@ -45,7 +46,7 @@ bool Mesh::write(const std::string& fileName) const
     MeshIO::write(out, *this);
     
     out.close();
-    return false;
+    return true;
 }
 
 double Mesh::parameterize(int mode, int optScheme)

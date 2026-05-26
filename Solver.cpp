@@ -1,5 +1,5 @@
 #include "Solver.h"
-#ifdef USE_MOSEK
+#if defined(USE_MOSEK) && !defined(__EMSCRIPTEN__)
 #include "MosekSolver.h"
 #else
 #include "MosekStub.h"

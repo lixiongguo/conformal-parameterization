@@ -19,7 +19,7 @@ typedef void* MSKtask_t;
 #define MSK_BK_FX 0  // Fixed
 #define MSK_BK_FR 1  // Free
 #define MSK_BK_LO 2  // Lower bound
-#define MSK_BK_RA 3  # Range
+#define MSK_BK_RA 3  // Range
 #define MSK_BK_UP 4  // Upper bound
 
 // MOSEK infinity constant

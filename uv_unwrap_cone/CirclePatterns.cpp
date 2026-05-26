@@ -1,15 +1,17 @@
 #include "CirclePatterns.h"
+#include <algorithm>
 
 CirclePatterns::CirclePatterns(Mesh& mesh0, int optScheme0):
 Parameterization(mesh0),
 angles(mesh.halfEdges.size()),
 thetas(mesh.edges.size()),
-radii(mesh.faces.size()-1),
+radii(std::max(1, (int)mesh.faces.size() - (int)mesh.boundaries.size())),
 eIntIndices(mesh.edges.size()),
 imaginaryHe(0),
 OptScheme(optScheme0)
 {
-    solver.n = (int)mesh.faces.size()-1;
+  // One radius per interior (non-imaginary-boundary) face; indices use Face::index.
+  solver.n = std::max(1, (int)mesh.faces.size() - (int)mesh.boundaries.size());
 }
 
 void CirclePatterns::setupAngleOptProblem()
@@ -29,10 +31,9 @@ void CirclePatterns::setupAngleOptProblem()
     for (VertexCIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
         int vIdx = v->index + shift;
         if (v->isBoundary()) {
-            mosekSolver.bkc[vIdx] = MSK_BK_RA;
-            mosekSolver.blc[vIdx] = 0.0;
-            mosekSolver.buc[vIdx] = 2*M_PI;
-        
+            mosekSolver.bkc[vIdx] = MSK_BK_FX;
+            mosekSolver.blc[vIdx] = M_PI;
+            mosekSolver.buc[vIdx] = M_PI;
         } else {
             mosekSolver.bkc[vIdx] = MSK_BK_FX;
             mosekSolver.blc[vIdx] = 2*M_PI;
