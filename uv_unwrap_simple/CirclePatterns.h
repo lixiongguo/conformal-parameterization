@@ -3,7 +3,11 @@
 
 #include "Parameterization.h"
 #include "Utils.h"
+#ifdef __EMSCRIPTEN__
+#include "MosekStub.h"
+#else
 #include "MosekSolver.h"
+#endif
 #include <stack>
 
 class CirclePatterns: public Parameterization {
