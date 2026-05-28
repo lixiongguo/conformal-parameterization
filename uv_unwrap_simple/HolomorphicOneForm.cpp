@@ -1,4 +1,7 @@
 #include "HolomorphicOneForm.h"
+#include "Lscm.h"
+#include "../topology/TreeCotreeBasis.h"
+#include <iostream>
 #include <algorithm>
 #include <cmath>
 #include <queue>
@@ -6,6 +9,20 @@
 #include <utility>
 
 using namespace Eigen;
+
+namespace {
+
+constexpr double kReg = 1e-8;
+
+bool isFiniteVector(const VectorXd& v)
+{
+    for (int i = 0; i < v.size(); ++i) {
+        if (!std::isfinite(v(i))) return false;
+    }
+    return true;
+}
+
+} // namespace
 
 HolomorphicOneForm::HolomorphicOneForm(Mesh& mesh0)
     : Parameterization(mesh0)
@@ -37,22 +54,29 @@ void HolomorphicOneForm::extractMesh()
     V.resize(nV, 3);
     F.resize(nF * 3);
     for (VertexCIter v = mesh.vertices.begin(); v != mesh.vertices.end(); ++v) {
+        if (v->index < 0 || v->index >= nV) continue;
         V.row(v->index) = v->position;
     }
 
     int fi = 0;
     for (FaceCIter f = mesh.faces.begin(); f != mesh.faces.end(); ++f) {
         if (f->isBoundary()) continue;
-        F[fi * 3] = f->he->vertex->index;
-        F[fi * 3 + 1] = f->he->next->vertex->index;
-        F[fi * 3 + 2] = f->he->next->next->vertex->index;
+        const int a = f->he->vertex->index;
+        const int b = f->he->next->vertex->index;
+        const int c = f->he->next->next->vertex->index;
+        if (a < 0 || a >= nV || b < 0 || b >= nV || c < 0 || c >= nV) continue;
+        F[fi * 3] = a;
+        F[fi * 3 + 1] = b;
+        F[fi * 3 + 2] = c;
         ++fi;
     }
+    nF = fi;
 
     for (int f = 0; f < nF; ++f) {
         for (int k = 0; k < 3; ++k) {
             int a = F[f * 3 + k];
             int b = F[f * 3 + (k + 1) % 3];
+            if (a < 0 || a >= nV || b < 0 || b >= nV) continue;
             int v0 = std::min(a, b);
             int v1 = std::max(a, b);
             const std::pair<int, int> key{v0, v1};
@@ -79,8 +103,8 @@ void HolomorphicOneForm::extractMesh()
 
     for (int ei = 0; ei < nE; ++ei) {
         const EdgeInfo& e = edges[ei];
-        vtxInc[e.v0].push_back({ei, +1});
-        vtxInc[e.v1].push_back({ei, -1});
+        if (e.v0 >= 0 && e.v0 < nV) vtxInc[e.v0].push_back({ei, +1});
+        if (e.v1 >= 0 && e.v1 < nV) vtxInc[e.v1].push_back({ei, -1});
     }
 
     const int chi = nV - nE + nF;
@@ -98,6 +122,7 @@ void HolomorphicOneForm::extractMesh()
 
 int HolomorphicOneForm::findEdge(int a, int b) const
 {
+    if (a < 0 || b < 0 || a >= nV || b >= nV) return -1;
     const int v0 = std::min(a, b);
     const int v1 = std::max(a, b);
     const auto it = edgeMap.find({v0, v1});
@@ -116,12 +141,14 @@ int HolomorphicOneForm::edgeSign(int from, int to) const
 
 double HolomorphicOneForm::cotanWeightAtVertex(int vi, int edgeIdx) const
 {
+    if (vi < 0 || vi >= nV || edgeIdx < 0 || edgeIdx >= nE) return 0.0;
     const EdgeInfo& e = edges[edgeIdx];
     const int vj = (e.v0 == vi) ? e.v1 : e.v0;
+    if (vj < 0 || vj >= nV) return 0.0;
     double w = 0.0;
 
     auto accumulate = [&](int fi) {
-        if (fi < 0) return;
+        if (fi < 0 || fi >= nF) return;
         int opp = -1;
         for (int k = 0; k < 3; ++k) {
             const int vv = F[fi * 3 + k];
@@ -130,7 +157,7 @@ double HolomorphicOneForm::cotanWeightAtVertex(int vi, int edgeIdx) const
                 break;
             }
         }
-        if (opp >= 0) {
+        if (opp >= 0 && opp < nV) {
             w += cotan(V.row(opp), V.row(vi), V.row(vj));
         }
     };
@@ -164,59 +191,37 @@ void HolomorphicOneForm::collectTreeCycles(
     std::vector<std::vector<std::pair<int, int>>>& cycles) const
 {
     cycles.clear();
-    if (nV == 0 || nE == 0) return;
+    if (nV == 0 || nF == 0 || nE == 0 || genus <= 0) return;
+    if (nB != 0) return; // This helper is for closed meshes only.
 
-    std::vector<int> parent(nV, -1);
-    std::vector<int> parentEdge(nV, -1);
-    std::vector<int> parentSign(nV, 0);
-    std::vector<char> visited(nV, 0);
-    std::queue<int> q;
-
-    q.push(0);
-    visited[0] = 1;
-
-    while (!q.empty()) {
-        const int u = q.front();
-        q.pop();
-        for (const auto& inc : vtxInc[u]) {
-            const int ei = inc.first;
-            const int s = inc.second;
-            const EdgeInfo& e = edges[ei];
-            const int v = (e.v0 == u) ? e.v1 : e.v0;
-            if (visited[v]) continue;
-            visited[v] = 1;
-            parent[v] = u;
-            parentEdge[v] = ei;
-            parentSign[v] = (e.v0 == u) ? +1 : -1;
-            q.push(v);
-        }
-    }
-
+    std::vector<topology::TreeCotreeBasis::Edge> topoEdges;
+    topoEdges.reserve(static_cast<size_t>(nE));
     for (int ei = 0; ei < nE; ++ei) {
         const EdgeInfo& e = edges[ei];
-        const int a = e.v0;
-        const int b = e.v1;
-        if (parent[a] == b || parent[b] == a) continue;
+        topology::TreeCotreeBasis::Edge te;
+        te.v0 = e.v0;
+        te.v1 = e.v1;
+        te.f0 = e.f0;
+        te.f1 = e.f1;
+        topoEdges.push_back(te);
+    }
 
-        std::vector<std::pair<int, int>> cycle;
-        cycle.push_back({ei, +1});
+    auto basis = topology::TreeCotreeBasis::buildClosedMeshBasis(
+        nV, nF, topoEdges, genus,
+        [&](int a, int b) { return findEdge(a, b); },
+        [&](int from, int to) { return edgeSign(from, to); });
 
-        int x = a;
-        int y = b;
-        std::set<int> seenA;
-        while (x != 0 && seenA.insert(x).second) {
-            if (parentEdge[x] < 0) break;
-            cycle.push_back({parentEdge[x], parentSign[x]});
-            x = parent[x];
-        }
-        std::set<int> seenB;
-        while (y != 0 && seenB.insert(y).second) {
-            if (parentEdge[y] < 0) break;
-            cycle.push_back({parentEdge[y], -parentSign[y]});
-            y = parent[y];
-        }
-        if (!cycle.empty()) cycles.push_back(cycle);
-        if (static_cast<int>(cycles.size()) >= std::max(1, 2 * genus)) break;
+    if ((int)basis.size() != 2 * genus) {
+        std::cerr << "[HolomorphicOneForm] tree-cotree produced " << basis.size()
+                  << " cycles, expected " << (2 * genus) << " for genus=" << genus << ".\n";
+    }
+
+    cycles.reserve(basis.size());
+    for (const auto& cyc : basis) {
+        std::vector<std::pair<int, int>> out;
+        out.reserve(cyc.size());
+        for (const auto& se : cyc) out.push_back(se);
+        if (!out.empty()) cycles.push_back(std::move(out));
     }
 }
 
@@ -244,6 +249,7 @@ bool HolomorphicOneForm::solveHarmonic1Form(Eigen::VectorXd& omega)
 
     for (int vi = 0; vi < nV; ++vi) {
         for (const auto& inc : vtxInc[vi]) {
+            if (inc.first < 0 || inc.first >= nE) continue;
             const double w = cotanWeightAtVertex(vi, inc.first);
             trips.emplace_back(row, inc.first, w * static_cast<double>(inc.second));
         }
@@ -252,49 +258,61 @@ bool HolomorphicOneForm::solveHarmonic1Form(Eigen::VectorXd& omega)
     }
 
     std::vector<std::vector<std::pair<int, int>>> cycles;
-    collectBoundaryCycles(cycles);
-    if (cycles.empty() && genus > 0) {
-        collectTreeCycles(cycles);
+    if (genus > 0) {
+        collectBoundaryCycles(cycles);
+        if (cycles.empty()) {
+            collectTreeCycles(cycles);
+        }
     }
 
     const int targetPeriodRows = std::max(0, 2 * genus);
     for (int i = 0; i < targetPeriodRows && i < static_cast<int>(cycles.size()); ++i) {
         for (const auto& term : cycles[i]) {
+            if (term.first < 0 || term.first >= nE) continue;
             trips.emplace_back(row, term.first, static_cast<double>(term.second));
         }
         rhs.push_back(0.0);
         ++row;
     }
 
-    if (genus == 0) {
-        trips.emplace_back(row, normalizeEdge, 1.0);
-        rhs.push_back(1.0);
-        ++row;
-    } else if (row < nE) {
+    if (normalizeEdge >= 0 && normalizeEdge < nE) {
         trips.emplace_back(row, normalizeEdge, 1.0);
         rhs.push_back(1.0);
         ++row;
     }
 
+    for (int ei = 0; ei < nE; ++ei) {
+        trips.emplace_back(row, ei, kReg);
+        rhs.push_back(0.0);
+        ++row;
+    }
+
     if (row == 0 || nE == 0) return false;
+
+    // Avoid forming A^T A for very large meshes (WASM memory limit).
+    if (nE > 8000) return false;
 
     SparseMatrix<double> A(row, nE);
     A.setFromTriplets(trips.begin(), trips.end());
     VectorXd b = Map<VectorXd>(rhs.data(), static_cast<int>(rhs.size()));
 
     const SparseMatrix<double> AtA = A.transpose() * A;
+    SparseMatrix<double> reg(nE, nE);
+    reg.setIdentity();
+    const SparseMatrix<double> AtAreg = AtA + kReg * reg;
     const VectorXd Atb = A.transpose() * b;
 
     SimplicialLDLT<SparseMatrix<double>> solver;
-    solver.compute(AtA);
+    solver.compute(AtAreg);
     if (solver.info() != Success) return false;
 
     omega = solver.solve(Atb);
-    return solver.info() == Success;
+    return solver.info() == Success && omega.size() == nE && isFiniteVector(omega);
 }
 
 double HolomorphicOneForm::triangleArea(int fi) const
 {
+    if (fi < 0 || fi >= nF) return 0.0;
     const Vector3d p0 = V.row(F[fi * 3]);
     const Vector3d p1 = V.row(F[fi * 3 + 1]);
     const Vector3d p2 = V.row(F[fi * 3 + 2]);
@@ -310,9 +328,9 @@ void HolomorphicOneForm::faceEdgeValues(int fi, const Eigen::VectorXd& omega, Ei
     const int ebc = findEdge(b, c);
     const int eca = findEdge(c, a);
     vals = Vector3d::Zero();
-    if (eab >= 0) vals(0) = edgeSign(a, b) * omega(eab);
-    if (ebc >= 0) vals(1) = edgeSign(b, c) * omega(ebc);
-    if (eca >= 0) vals(2) = edgeSign(c, a) * omega(eca);
+    if (eab >= 0 && eab < omega.size()) vals(0) = edgeSign(a, b) * omega(eab);
+    if (ebc >= 0 && ebc < omega.size()) vals(1) = edgeSign(b, c) * omega(ebc);
+    if (eca >= 0 && eca < omega.size()) vals(2) = edgeSign(c, a) * omega(eca);
 }
 
 void HolomorphicOneForm::computeHodgeConjugate(
@@ -326,6 +344,8 @@ void HolomorphicOneForm::computeHodgeConjugate(
         const int a = F[fi * 3];
         const int b = F[fi * 3 + 1];
         const int c = F[fi * 3 + 2];
+        if (a < 0 || a >= nV || b < 0 || b >= nV || c < 0 || c >= nV) continue;
+
         const Vector3d p0 = V.row(a);
         const Vector3d p1 = V.row(b);
         const Vector3d p2 = V.row(c);
@@ -342,23 +362,25 @@ void HolomorphicOneForm::computeHodgeConjugate(
         Vector3d wVals;
         faceEdgeValues(fi, omega, wVals);
 
-        const Vector3d n = e01.cross(p2 - p0).normalized();
-        Vector3d t1 = e01.normalized();
-        Vector3d t2 = n.cross(t1).normalized();
+        const Vector3d n = e01.cross(p2 - p0);
+        const double nLen = n.norm();
+        if (nLen < 1e-14) continue;
+        const Vector3d nHat = n / nLen;
+        Vector3d t1 = e01 / l0;
+        Vector3d t2 = nHat.cross(t1);
+        const double t2Len = t2.norm();
+        if (t2Len < 1e-14) continue;
+        t2 /= t2Len;
 
         const Vector2d q1(l0, 0.0);
         const Vector2d q2(e12.dot(t1), e12.dot(t2));
-        const Vector2d q0(0.0, 0.0);
 
-        Matrix2d A;
-        A.col(0) = (q1 - q0) / l0;
-        A.col(1) = (q2 - q0) / l1;
+        Matrix2d matA;
+        matA.col(0) = q1 / l0;
+        matA.col(1) = q2 / l1;
 
-        const Vector2d bVec(
-            wVals(0) / l0,
-            wVals(1) / l1);
-
-        Vector2d grad = A.colPivHouseholderQr().solve(bVec);
+        const Vector2d bVec(wVals(0) / l0, wVals(1) / l1);
+        const Vector2d grad = matA.colPivHouseholderQr().solve(bVec);
         const Vector2d starGrad(-grad.y(), grad.x());
 
         const int eab = findEdge(a, b);
@@ -379,9 +401,13 @@ void HolomorphicOneForm::computeHodgeConjugate(
         };
 
         for (int k = 0; k < 3; ++k) {
-            if (local[k].idx < 0) continue;
+            if (local[k].idx < 0 || local[k].idx >= nE) continue;
+            const double tLen = local[k].tangent.norm();
+            if (tLen < 1e-14) continue;
             const Vector2d t2d(local[k].tangent.dot(t1), local[k].tangent.dot(t2));
-            const double starVal = starGrad.dot(t2d.normalized()) * local[k].len;
+            const double t2dLen = t2d.norm();
+            if (t2dLen < 1e-14) continue;
+            const double starVal = starGrad.dot(t2d / t2dLen) * local[k].len;
             const int s = edgeSign(local[k].from, local[k].to);
             starOmega(local[k].idx) += s * starVal;
             weightSum[local[k].idx] += 1.0;
@@ -399,33 +425,37 @@ void HolomorphicOneForm::integrateTree(
     const Eigen::VectorXd& omega,
     const Eigen::VectorXd& starOmega)
 {
+    std::vector<Vector2d> uv(static_cast<size_t>(nV), Vector2d::Zero());
     std::vector<char> visited(nV, 0);
     std::queue<int> q;
+
     q.push(0);
     visited[0] = 1;
-    mesh.vertices[0].uv = Vector2d::Zero();
 
     while (!q.empty()) {
         const int u = q.front();
         q.pop();
-        const Vector2d base = mesh.vertices[u].uv;
+        if (u < 0 || u >= nV) continue;
+        const Vector2d base = uv[static_cast<size_t>(u)];
 
         for (const auto& inc : vtxInc[u]) {
             const int ei = inc.first;
+            if (ei < 0 || ei >= nE || ei >= omega.size() || ei >= starOmega.size()) continue;
             const EdgeInfo& e = edges[ei];
             const int v = (e.v0 == u) ? e.v1 : e.v0;
-            if (visited[v]) continue;
+            if (v < 0 || v >= nV || visited[v]) continue;
 
             visited[v] = 1;
             const int s = (e.v0 == u) ? +1 : -1;
-            mesh.vertices[v].uv = base + Vector2d(s * omega(ei), s * starOmega(ei));
+            uv[static_cast<size_t>(v)] = base + Vector2d(s * omega(ei), s * starOmega(ei));
             q.push(v);
         }
     }
 
-    for (int i = 0; i < nV; ++i) {
-        if (!visited[i]) {
-            mesh.vertices[i].uv = Vector2d::Zero();
+    for (VertexIter v = mesh.vertices.begin(); v != mesh.vertices.end(); ++v) {
+        const int i = v->index;
+        if (i >= 0 && i < nV) {
+            v->uv = uv[static_cast<size_t>(i)];
         }
     }
 }
@@ -433,14 +463,38 @@ void HolomorphicOneForm::integrateTree(
 void HolomorphicOneForm::parameterize()
 {
     extractMesh();
-    if (nV < 3 || nF < 1 || nE < 1) return;
+    if (nV < 3 || nF < 1 || nE < 1) {
+        Lscm fallback(mesh);
+        fallback.parameterize();
+        return;
+    }
 
     VectorXd omega;
-    if (!solveHarmonic1Form(omega)) return;
+    if (!solveHarmonic1Form(omega)) {
+        Lscm fallback(mesh);
+        fallback.parameterize();
+        return;
+    }
 
     VectorXd starOmega;
     computeHodgeConjugate(omega, starOmega);
+    if (!isFiniteVector(starOmega)) {
+        Lscm fallback(mesh);
+        fallback.parameterize();
+        return;
+    }
 
     integrateTree(omega, starOmega);
+
+    double spread = 0.0;
+    for (VertexCIter v = mesh.vertices.begin(); v != mesh.vertices.end(); ++v) {
+        spread = std::max(spread, std::max(std::abs(v->uv.x()), std::abs(v->uv.y())));
+    }
+    if (spread < 1e-12) {
+        Lscm fallback(mesh);
+        fallback.parameterize();
+        return;
+    }
+
     normalize();
 }
