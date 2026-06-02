@@ -1,5 +1,6 @@
 #include "CirclePatterns.h"
 #include <algorithm>
+#include "QPsolver/QPSolver.h"
 
 CirclePatterns::CirclePatterns(Mesh& mesh0, int optScheme0):
 Parameterization(mesh0),
@@ -128,20 +129,129 @@ bool CirclePatterns::computeAngles()
     int numanz = 3 * variables - imaginaryHe;
     int numqnz = variables;
     
-    // initialize mosekSolver
-    if (!mosekSolver.initialize(variables, constraints, numanz, 0, numqnz)) return false;
-    
-    // setup optimization problem
-    setupAngleOptProblem();
-    
-    // solve
-    bool success = mosekSolver.solve(MosekSolver::QO);
-    if (success) setThetas();
-    
-    // reset mosekSolver
-    mosekSolver.reset();
-    
-    return success;
+    // Try MOSEK first (native builds). WASM uses MosekStub and will fail here.
+    if (mosekSolver.initialize(variables, constraints, numanz, 0, numqnz)) {
+        setupAngleOptProblem();
+        bool success = mosekSolver.solve(MosekSolver::QO);
+        if (success) {
+            setThetas();
+            mosekSolver.reset();
+            return true;
+        }
+        mosekSolver.reset();
+    }
+
+    // Fallback: solve the same convex QP with a lightweight ADMM-based QP solver.
+    // This is particularly important for WASM builds where MOSEK is not available.
+    QPsolver::MinNormBoxQPProblem qp;
+    qp.n = variables;
+    qp.m = constraints;
+
+    const int faceShift = (int)(mesh.faces.size() - mesh.boundaries.size());
+    const int edgeShift = faceShift + (int)mesh.vertices.size();
+
+    qp.lowerX = Eigen::VectorXd::Zero(variables);
+    qp.upperX = Eigen::VectorXd::Zero(variables);
+    qp.lowerY = Eigen::VectorXd::Zero(constraints);
+    qp.upperY = Eigen::VectorXd::Zero(constraints);
+
+    // Constraint initialization (triangle sum / vertex sum / local Delaunay range)
+    for (FaceCIter f = mesh.faces.begin(); f != mesh.faces.end(); f++) {
+        if (!f->isBoundary()) {
+            const int row = f->index;
+            if (row < 0 || row >= faceShift) return false;
+            qp.lowerY[row] = M_PI;
+            qp.upperY[row] = M_PI;
+        }
+    }
+    for (VertexCIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
+        const int row = v->index + faceShift;
+        if (row < 0 || row >= constraints) return false;
+        if (v->isBoundary()) {
+            qp.lowerY[row] = M_PI;
+            qp.upperY[row] = M_PI;
+        } else {
+            qp.lowerY[row] = 2.0 * M_PI;
+            qp.upperY[row] = 2.0 * M_PI;
+        }
+    }
+    for (EdgeCIter e = mesh.edges.begin(); e != mesh.edges.end(); e++) {
+        if (!e->isBoundary()) {
+            const int row = eIntIndices[e->index] + edgeShift;
+            if (row < 0 || row >= constraints) return false;
+            qp.lowerY[row] = EPSILON;
+            qp.upperY[row] = M_PI - EPSILON;
+        }
+    }
+
+    // Build A matrix and adjust bounds by subtracting original angles.
+    std::vector<Eigen::Triplet<double>> triplets;
+    triplets.reserve(std::max(0, numanz));
+
+    int a = 0;
+    for (HalfEdgeCIter he = mesh.halfEdges.begin(); he != mesh.halfEdges.end(); he++) {
+        if (!he->onBoundary) {
+            const double angle = he->angle();
+
+            if (a >= variables) return false;
+            qp.lowerX[a] = EPSILON - angle;
+            qp.upperX[a] = (M_PI - EPSILON) - angle;
+
+            // face sum contribution: x_a + ... = M_PI - sum(original_angles)
+            const int fIdx = he->face->index;
+            if (fIdx < 0 || fIdx >= faceShift) return false;
+            qp.lowerY[fIdx] -= angle;
+            qp.upperY[fIdx] -= angle;
+            triplets.emplace_back(fIdx, a, 1.0);
+
+            // vertex sum contribution
+            const int vIdx = he->next->next->vertex->index + faceShift;
+            if (vIdx < 0 || vIdx >= constraints) return false;
+            qp.lowerY[vIdx] -= angle;
+            qp.upperY[vIdx] -= angle;
+            triplets.emplace_back(vIdx, a, 1.0);
+
+            // local Delaunay constraint contribution (only for interior edges)
+            if (!he->edge->isBoundary()) {
+                const int eRow = eIntIndices[he->edge->index] + edgeShift;
+                if (eRow < 0 || eRow >= constraints) return false;
+                qp.lowerY[eRow] -= angle;
+                qp.upperY[eRow] -= angle;
+                triplets.emplace_back(eRow, a, 1.0);
+            }
+
+            a++;
+        }
+    }
+    if (a != variables) return false;
+
+    qp.A.resize(constraints, variables);
+    qp.A.setFromTriplets(triplets.begin(), triplets.end());
+
+    Eigen::VectorXd corrections;
+    QPsolver::MinNormBoxQPOptions opts;
+    opts.admmMaxIters = 250;
+    opts.cgMaxIters = 120;
+    opts.rhoY = 1.0;
+    opts.rhoX = 1.0;
+
+    if (!QPsolver::QPSolver::solveMinNormBoxQPIdentityQ(qp, corrections, opts)) return false;
+    if (corrections.size() != variables) return false;
+
+    // Apply corrections back to angles/thetas (same as setThetas(), but without MOSEK memory).
+    int b = 0;
+    for (HalfEdgeCIter he = mesh.halfEdges.begin(); he != mesh.halfEdges.end(); he++) {
+        if (!he->onBoundary) angles[he->index] = he->angle() + corrections[b++];
+        else angles[he->index] = 0.0;
+    }
+    if (b != variables) return false;
+
+    for (EdgeCIter e = mesh.edges.begin(); e != mesh.edges.end(); e++) {
+        HalfEdgeCIter he = e->he;
+        thetas[e->index] = M_PI - angles[he->index] - angles[he->flip->index];
+    }
+
+    return true;
 }
 
 double ImLi2Sum(double dp, double theta)
