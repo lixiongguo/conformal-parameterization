@@ -1,54 +1,143 @@
 #ifndef MIQQUAD_H
+
 #define MIQQUAD_H
 
+
+
 #include "Parameterization.h"
+
+#include "CrossFieldIntegerProgram.h"
+
 #include <Eigen/SparseCholesky>
+#include <memory>
+
+
 
 /**
- * MIQ (Mixed-Integer Quadrangulation) global parameterization.
- * 
- * Two-phase algorithm (Bommes et al. 2009):
- *   Phase 1: Cross field optimization via alternating MIQP
- *     - Alternating between continuous θ (angle per face) and
- *       integer p_ij (quarter-turn jumps per edge)
- *     - min Σ ||θ_i - θ_j + (π/2)·p_ij||²
- *   Phase 2: Poisson-based UV parameterization
- *     - Given optimized θ, compute target directions per face
- *     - Solve L·u = div_x, L·v = div_y (Hodge decomposition)
+
+ * MIQ (Mixed-Integer Quadrangulation) global parameterization (Bommes et al. 2009).
+
+ *
+
+ * Phase 1 — CrossFieldIntegerProgram on face angles θ and edge jumps p.
+
+ * Phase 2 — Poisson parameterization aligned to the optimized 4-RoSy field.
+
  */
+
 class MIQQuad : public Parameterization {
+
 public:
+
     MIQQuad(Mesh& mesh0);
+
     void parameterize() override;
 
+
+
+    void setCrossFieldIterations(int iters) { crossIters_ = iters; }
+
+    void setJumpRefinePasses(int passes) { jumpRefinePasses_ = passes; }
+
+    void setJumpBounds(int lo, int hi) { jumpLo_ = lo; jumpHi_ = hi; }
+
+
+
+    int numFaces() const { return nF; }
+
+    int numEdges() const { return nE; }
+
+    const Eigen::VectorXd& faceTheta() const { return theta; }
+
+    const Eigen::VectorXi& edgeJumps() const { return jump; }
+
+    double crossFieldEnergy() const;
+
+
+
 protected:
-    // Phase 1: Cross field optimization
-    void initCrossField();                  // estimate initial θ from geometry
-    void buildFaceLaplacian(Eigen::SparseMatrix<double>& L);
-    bool optimizeCrossField(int maxIter=10);// alternating MIQP solver
-    void buildTargetDirs();                 // target u,v per face from θ
 
-    // Phase 2: Poisson solve for UV
+    struct Edge {
+
+        int v1 = 0;
+
+        int v2 = 0;
+
+        int f1 = -1;
+
+        int f2 = -1;
+
+        int idx = -1;
+
+    };
+
+
+
+    bool initMeshData();
+
+    void initCrossField();
+
+    bool solveCrossFieldIP();
+
+    std::vector<CrossFieldIntegerProgram::Edge> buildInternalEdges() const;
+
+    void buildTargetDirs();
+
     void buildCotLaplacian(Eigen::SparseMatrix<double>& L);
-    void solvePoisson();                    // L·u = div_x, L·v = div_y
 
-    // Helpers
+    void solvePoisson();
+
+
+
     void buildLocalFrame(const Eigen::Vector3d& n, Eigen::Vector3d& t1, Eigen::Vector3d& t2);
-    double cotan(const Eigen::Vector3d& a, const Eigen::Vector3d& b, const Eigen::Vector3d& c);
-    int roundToInt(double x);
 
-    // Data
+    double cotan(const Eigen::Vector3d& a, const Eigen::Vector3d& b, const Eigen::Vector3d& c);
+
+
+
     Eigen::MatrixXd vertPos;
-    Eigen::VectorXi faces;       // flattened face indices
-    int nV, nF, nE;
-    struct Edge { int v1, v2, f1, f2; };
+
+    Eigen::VectorXi faces;
+
+    int nV = 0;
+
+    int nF = 0;
+
+    int nE = 0;
+
     std::vector<Edge> edgeList;
 
-    Eigen::MatrixXd faceN;       // face normals
-    Eigen::VectorXd theta;       // optimized angle per face (mod π/2)
-    Eigen::VectorXi jump;        // integer p_ij per edge
-    Eigen::MatrixXd faceD1, faceD2; // two orthogonal dirs per face
+
+
+    Eigen::MatrixXd faceN;
+
+    Eigen::VectorXd theta;
+
+    Eigen::VectorXi jump;
+
+    Eigen::MatrixXd faceD1;
+
+    Eigen::MatrixXd faceD2;
+
     Eigen::MatrixXd UV;
+
+
+
+    int crossIters_ = 12;
+
+    int jumpRefinePasses_ = 2;
+
+    int jumpLo_ = -4;
+
+    int jumpHi_ = 4;
+
+
+
+    std::unique_ptr<CrossFieldIntegerProgram> crossFieldIP_;
+
 };
 
+
+
 #endif
+
