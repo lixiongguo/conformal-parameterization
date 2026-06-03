@@ -15,6 +15,15 @@ OptScheme(optScheme0)
   solver.n = std::max(1, (int)mesh.faces.size() - (int)mesh.boundaries.size());
 }
 
+void CirclePatterns::setConeSingulars(const std::vector<int>& coneIdx,
+                                      const std::vector<double>& coneAngles)
+{
+    coneSingulars.clear();
+    for (size_t i = 0; i < coneIdx.size() && i < coneAngles.size(); i++) {
+        coneSingulars[coneIdx[i]] = coneAngles[i];
+    }
+}
+
 void CirclePatterns::setupAngleOptProblem()
 {
     // set triangle sum constraint
@@ -31,14 +40,19 @@ void CirclePatterns::setupAngleOptProblem()
     int shift = (int)(mesh.faces.size() - mesh.boundaries.size());
     for (VertexCIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
         int vIdx = v->index + shift;
+        // look up cone singularity target angle
+        auto it = coneSingulars.find(v->index);
+        double targetAngle = (it != coneSingulars.end()) ? it->second :
+                             (v->isBoundary() ? M_PI : 2*M_PI);
+        
         if (v->isBoundary()) {
             mosekSolver.bkc[vIdx] = MSK_BK_FX;
             mosekSolver.blc[vIdx] = M_PI;
             mosekSolver.buc[vIdx] = M_PI;
         } else {
             mosekSolver.bkc[vIdx] = MSK_BK_FX;
-            mosekSolver.blc[vIdx] = 2*M_PI;
-            mosekSolver.buc[vIdx] = 2*M_PI;
+            mosekSolver.blc[vIdx] = targetAngle;
+            mosekSolver.buc[vIdx] = targetAngle;
         }
     }
     
@@ -167,12 +181,16 @@ bool CirclePatterns::computeAngles()
     for (VertexCIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
         const int row = v->index + faceShift;
         if (row < 0 || row >= constraints) return false;
+        // look up cone singularity target angle
+        auto it = coneSingulars.find(v->index);
+        double targetAngle = (it != coneSingulars.end()) ? it->second :
+                             (v->isBoundary() ? M_PI : 2.0 * M_PI);
         if (v->isBoundary()) {
             qp.lowerY[row] = M_PI;
             qp.upperY[row] = M_PI;
         } else {
-            qp.lowerY[row] = 2.0 * M_PI;
-            qp.upperY[row] = 2.0 * M_PI;
+            qp.lowerY[row] = targetAngle;
+            qp.upperY[row] = targetAngle;
         }
     }
     for (EdgeCIter e = mesh.edges.begin(); e != mesh.edges.end(); e++) {

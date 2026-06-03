@@ -4,6 +4,8 @@
 #include "Parameterization.h"
 #include "Solver.h"
 #include <stack>
+#include <unordered_map>
+#include <vector>
 
 /**
  * Discrete Ricci Flow parameterization using circle packing metric.
@@ -26,6 +28,11 @@ public:
 
     // parameterize
     void parameterize() override;
+
+    // set cone singularities: vertex_index → target_angle_sum (e.g. 4π, 6π)
+    // internally converts to target curvature: K̄ = 2π - Θ̂
+    void setConeSingulars(const std::vector<int>& coneIdx,
+                          const std::vector<double>& coneAngles);
 
 protected:
     // initialize inversive distances from original edge lengths
@@ -58,6 +65,7 @@ protected:
 
     // member variables
     std::unordered_map<int, int> index;         // vertex -> optimization variable index
+    std::unordered_map<int, double> coneSingulars;  // vertex_index → target_angle_sum
     std::vector<double> inversiveDistance;       // inversive distance per edge (indexed by edge->index)
     Eigen::VectorXd Ktarget;                    // target curvature
     Eigen::VectorXd curvature;                  // current curvature (per optimization variable)

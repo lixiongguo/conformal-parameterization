@@ -37,10 +37,30 @@ void RicciFlow::initInversiveDistances()
     }
 }
 
+void RicciFlow::setConeSingulars(const std::vector<int>& coneIdx,
+                                  const std::vector<double>& coneAngles)
+{
+    coneSingulars.clear();
+    for (size_t i = 0; i < coneIdx.size() && i < coneAngles.size(); i++) {
+        coneSingulars[coneIdx[i]] = coneAngles[i];
+    }
+}
+
 void RicciFlow::setTargetCurvature()
 {
     Ktarget.resize(solver.n);
-    Ktarget.setZero(); // flat metric → K̄ = 0
+    Ktarget.setZero(); // flat metric → K̄ = 0 for non-singular vertices
+    
+    // cone singularities: target curvature K̄ = 2π - Θ̂
+    // e.g. Θ̂ = 4π → K̄ = -2π (negative curvature concentration)
+    for (VertexCIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
+        if (v->isBoundary()) continue;
+        auto it = coneSingulars.find(v->index);
+        if (it != coneSingulars.end()) {
+            int vIdx = index.at(v->index);
+            Ktarget[vIdx] = 2.0 * M_PI - it->second;
+        }
+    }
 }
 
 // ============================================================

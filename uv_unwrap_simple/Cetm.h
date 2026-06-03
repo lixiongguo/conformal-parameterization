@@ -4,6 +4,8 @@
 #include "Parameterization.h"
 #include "Utils.h"
 #include <stack>
+#include <unordered_map>
+#include <vector>
 
 class Cetm: public Parameterization {
 public:
@@ -12,6 +14,10 @@ public:
 
     // parameterize
     void parameterize() override;
+    
+    // set cone singularities: vertex_index → target_angle_sum (e.g. 4π, 6π)
+    void setConeSingulars(const std::vector<int>& coneIdx,
+                          const std::vector<double>& coneAngles);
     
 protected:
     // sets target theta values
@@ -37,6 +43,7 @@ protected:
     
     // member variables
     std::unordered_map<int, int> index;
+    std::unordered_map<int, double> coneSingulars;  // vertex_index → target_angle_sum
     Eigen::VectorXd thetas;
     Eigen::VectorXd lengths;
     Eigen::VectorXd angles;

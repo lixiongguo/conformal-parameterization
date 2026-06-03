@@ -9,6 +9,8 @@
 #include "MosekSolver.h"
 #endif
 #include <stack>
+#include <unordered_map>
+#include <vector>
 
 class CirclePatterns: public Parameterization {
 public:
@@ -17,6 +19,10 @@ public:
     
     // parameterize
     void parameterize() override;
+    
+    // set cone singularities: vertex_index → target_angle_sum (e.g. 4π, 6π)
+    void setConeSingulars(const std::vector<int>& coneIdx,
+                          const std::vector<double>& coneAngles);
     
 protected:
     // sets angle based constraints, bounds and objective function
@@ -55,6 +61,7 @@ protected:
     Eigen::VectorXd radii;
     Eigen::VectorXi eIntIndices;
     int imaginaryHe;
+    std::unordered_map<int, double> coneSingulars;  // vertex_index → target_angle_sum
     MosekSolver::Solver mosekSolver;
     Solver solver;
     int OptScheme;

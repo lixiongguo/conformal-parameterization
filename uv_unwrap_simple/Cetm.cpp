@@ -10,10 +10,26 @@ OptScheme(optScheme0)
     
 }
 
+void Cetm::setConeSingulars(const std::vector<int>& coneIdx,
+                            const std::vector<double>& coneAngles)
+{
+    coneSingulars.clear();
+    for (size_t i = 0; i < coneIdx.size() && i < coneAngles.size(); i++) {
+        coneSingulars[coneIdx[i]] = coneAngles[i];
+    }
+}
+
 void Cetm::setTargetThetas()
 {
     for (VertexCIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
-        if (!v->isBoundary()) thetas[index[v->index]] = 2*M_PI;
+        if (v->isBoundary()) continue;
+        int vId = index[v->index];
+        auto it = coneSingulars.find(v->index);
+        if (it != coneSingulars.end()) {
+            thetas[vId] = it->second; // cone singularity target angle sum
+        } else {
+            thetas[vId] = 2*M_PI;
+        }
     }
 }
 
