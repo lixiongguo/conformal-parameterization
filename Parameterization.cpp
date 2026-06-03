@@ -1,5 +1,5 @@
 #include "Parameterization.h"
-#include "QcError.h"
+#include "geometry/QcError.h"
 
 Parameterization::Parameterization(Mesh& mesh0):
 mesh(mesh0)

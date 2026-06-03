@@ -4,8 +4,8 @@
 #include <cmath>
 #include <unordered_set>
 
-Tutte::Tutte(Mesh& mesh0, TutteBoundary boundaryShape)
-: Parameterization(mesh0), m_shape(boundaryShape) {}
+Tutte::Tutte(Mesh& mesh0, TutteBoundary boundaryShape, TutteWeight weight)
+: Parameterization(mesh0), m_shape(boundaryShape), m_weight(weight) {}
 
 void Tutte::findBoundaryLoop(std::vector<int>& boundaryVerts) const
 {
@@ -63,7 +63,7 @@ void Tutte::solveLaplacian(const std::vector<int>& boundaryVerts)
     Eigen::VectorXd bx = Eigen::VectorXd::Zero(nInterior);
     Eigen::VectorXd by = Eigen::VectorXd::Zero(nInterior);
     
-    // Iterate over faces to build cot-Laplacian (more robust than vertex iteration)
+    // Iterate over faces to build Laplacian (cotan or uniform weights)
     for (FaceCIter f = mesh.faces.begin(); f != mesh.faces.end(); f++) {
         if (f->isBoundary()) continue;
         
@@ -74,11 +74,17 @@ void Tutte::solveLaplacian(const std::vector<int>& boundaryVerts)
         for (int k = 0; k < 3; k++) {
             int a = vi[k], b = vi[(k+1)%3], c = vi[(k+2)%3]; // edge (b,c) opposite to a
             
-            // Cotangent of angle at vertex a
-            Eigen::Vector3d e1 = mesh.vertices[b].position - mesh.vertices[a].position;
-            Eigen::Vector3d e2 = mesh.vertices[c].position - mesh.vertices[a].position;
-            double cotVal = e1.dot(e2) / std::max(e1.cross(e2).norm(), 1e-12);
-            double w = std::max(cotVal, 1e-8);
+            double w;
+            if (m_weight == TutteWeight::UNIFORM) {
+                // Uniform weight: w_ij = 1 for every edge
+                w = 1.0;
+            } else {
+                // Cotangent of angle at vertex a
+                Eigen::Vector3d e1 = mesh.vertices[b].position - mesh.vertices[a].position;
+                Eigen::Vector3d e2 = mesh.vertices[c].position - mesh.vertices[a].position;
+                double cotVal = e1.dot(e2) / std::max(e1.cross(e2).norm(), 1e-12);
+                w = std::max(cotVal, 1e-8);
+            }
             
             // Contribution to vertices b and c (the edge endpoints)
             for (int side = 0; side < 2; side++) {
