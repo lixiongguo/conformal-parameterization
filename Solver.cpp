@@ -91,6 +91,12 @@ void Solver::newton()
         Eigen::VectorXd p;
         solvePositiveDefinite(p, g, H);
 
+        // 回退机制: 若 Cholesky 分解失败导致 p 含 NaN (如 Hessian 条件数过大),
+        // 则退回到梯度下降方向, 避免 NaN 污染 x 后被误判为"收敛"
+        if (!p.allFinite()) {
+            p = g;  // fallback to gradient descent direction
+        }
+
         // compute step size
         double t = 1.0;
         double fp = f;

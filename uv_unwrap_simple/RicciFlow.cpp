@@ -267,10 +267,13 @@ void RicciFlow::computeHessian(Eigen::SparseMatrix<double>& hessian, const Eigen
         do {
             // Edge from v to neighbor: he points to neighbor
             // cot(angle opposite to this edge) = cot(angle at he->next->vertex)
+            // cot(α) = 1/tan(α). 当三角形近乎退化时 (α→0 或 α→π), 
+            // tan(α)→0, 1/tan(α)→∞, 导致 Hessian 条件数爆炸 → Cholesky 失败.
+            // 对 tan 值做下界 clamp 以防止除零/溢出.
             double cotAlpha = !he->onBoundary ? 
-                1.0 / tan(halfEdgeAngles[he->next->index]) : 0.0;
+                1.0 / std::max(tan(halfEdgeAngles[he->next->index]), 1e-10) : 0.0;
             double cotBeta  = !he->flip->onBoundary ? 
-                1.0 / tan(halfEdgeAngles[he->flip->next->index]) : 0.0;
+                1.0 / std::max(tan(halfEdgeAngles[he->flip->next->index]), 1e-10) : 0.0;
             
             double w = (cotAlpha + cotBeta);
             sumW += w;
@@ -427,9 +430,16 @@ void RicciFlow::parameterize()
     setTargetCurvature();
     
     // Step 3. Optimize radii (Ricci flow)
-    if (!optimizeRadii()) {
-        std::cout << "RicciFlow: optimization failed" << std::endl;
-        return;
+    if (!optimizeRadii() || !solver.x.allFinite()) {
+        // Newton 法可能因 Cholesky 分解失败返回 NaN 结果.
+        // 兜底方案: 重置并切换到梯度下降重试.
+        std::cout << "RicciFlow: Newton produced NaN, falling back to gradient descent" << std::endl;
+        solver.x = Eigen::VectorXd::Zero(solver.n);
+        OptScheme = GRAD_DESCENT;
+        if (!optimizeRadii()) {
+            std::cout << "RicciFlow: gradient descent also failed" << std::endl;
+            return;
+        }
     }
     
     // Remove global scale degree of freedom (nullspace of constant shift)
