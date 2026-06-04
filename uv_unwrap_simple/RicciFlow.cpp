@@ -118,12 +118,14 @@ void RicciFlow::computeEdgeLengthsAndAngles()
             he = he->next;
         } while (he != f->he);
         
-        // Compute three angles (angle at vertex i is opposite to edge i)
-        // In half-edge order: he->vertex is opposite to he->edge
+        // Compute three angles and store at the CORRECT half-edge:
+        // halfEdgeAngles[he->index] should be the angle at he->vertex.
+        // he->vertex is opposite to he->next->edge, which is al[(i+1)%3].
+        // So: opposite = al[(i+1)%3], adjacent1 = al[i], adjacent2 = al[(i+2)%3]
         i = 0;
         he = f->he;
         do {
-            halfEdgeAngles[he->index] = triangleAngle(al[i], al[(i+1)%3], al[(i+2)%3]);
+            halfEdgeAngles[he->index] = triangleAngle(al[(i+1)%3], al[i], al[(i+2)%3]);
             i++;
             he = he->next;
         } while (he != f->he);
@@ -280,8 +282,8 @@ void RicciFlow::computeHessian(Eigen::SparseMatrix<double>& hessian, const Eigen
             he = he->flip->next;
         } while (he != v->he);
         
-        // Diagonal: sum of weights + small regularization
-        HTriplets.push_back(Eigen::Triplet<double>(vIdx, vIdx, sumW + 1e-8));
+        // Diagonal: sum of weights + regularization (eliminates nullspace of global scaling)
+        HTriplets.push_back(Eigen::Triplet<double>(vIdx, vIdx, sumW + 1e-4));
     }
     
     hessian.resize(solver.n, solver.n);
@@ -305,12 +307,22 @@ bool RicciFlow::optimizeRadii()
     // We use a wrapper pattern: before computing energy/gradient/hessian, 
     // recompute edge lengths and angles.
     handle.computeEnergy = [this](double& energy, const Eigen::VectorXd& u) {
+        // Guard against NaN propagation from a failed Newton step
+        if (!u.allFinite()) {
+            energy = 1e10;
+            return;
+        }
         this->solver.x = u;
         this->computeEdgeLengthsAndAngles();
         this->computeEnergy(energy, u);
     };
     
     handle.computeGradient = [this](Eigen::VectorXd& gradient, const Eigen::VectorXd& u) {
+        // Guard against NaN
+        if (!u.allFinite()) {
+            gradient = Eigen::VectorXd::Zero(u.size());
+            return;
+        }
         this->computeGradient(gradient, u);
     };
     
@@ -418,6 +430,14 @@ void RicciFlow::parameterize()
     if (!optimizeRadii()) {
         std::cout << "RicciFlow: optimization failed" << std::endl;
         return;
+    }
+    
+    // Remove global scale degree of freedom (nullspace of constant shift)
+    // Ricci energy determines radii only up to a global scale factor;
+    // we pin mean log-radius to 0 so UV layout has a reasonable size.
+    if (solver.n > 0) {
+        double meanU = solver.x.mean();
+        solver.x.array() -= meanU;
     }
     
     // Step 4. Compute final edge lengths and angles
