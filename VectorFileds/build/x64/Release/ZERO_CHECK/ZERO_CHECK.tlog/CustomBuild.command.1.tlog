@@ -1,0 +1,10 @@
+^C:\USERS\LIXIO\ONEDRIVE\DESKTOP\MYDOC\LIXIONGGUO.GITHUB.IO\CPP\VECTORFILEDS\BUILD\CMAKEFILES\527CFD06D50F175EB5CE4B70D64FD3E5\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/lixio/OneDrive/Desktop/MyDoc/lixiongguo.github.io/cpp/VectorFileds -BC:/Users/lixio/OneDrive/Desktop/MyDoc/lixiongguo.github.io/cpp/VectorFileds/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Users/lixio/OneDrive/Desktop/MyDoc/lixiongguo.github.io/cpp/VectorFileds/build/VectorFields.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

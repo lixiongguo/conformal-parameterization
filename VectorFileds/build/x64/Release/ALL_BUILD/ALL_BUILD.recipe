@@ -1,0 +1,23 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <ProjectOutputs>
+    <ProjectOutput>
+      <FullPath>C:\Users\lixio\OneDrive\Desktop\MyDoc\lixiongguo.github.io\cpp\VectorFileds\build\x64\Release\ZERO_CHECK</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\lixio\OneDrive\Desktop\MyDoc\lixiongguo.github.io\cpp\VectorFileds\build\Release\complex_poly_field.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\lixio\OneDrive\Desktop\MyDoc\lixiongguo.github.io\cpp\VectorFileds\build\Release\nrosy_trivial_connection.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\lixio\OneDrive\Desktop\MyDoc\lixiongguo.github.io\cpp\VectorFileds\build\Release\trivial_connection.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\lixio\OneDrive\Desktop\MyDoc\lixiongguo.github.io\cpp\VectorFileds\build\x64\Release\ALL_BUILD</FullPath>
+    </ProjectOutput>
+  </ProjectOutputs>
+  <ContentFiles />
+  <SatelliteDlls />
+  <NonRecipeFileRefs />
+</Project>
