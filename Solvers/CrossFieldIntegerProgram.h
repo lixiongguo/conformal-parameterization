@@ -6,61 +6,60 @@
 #include <vector>
 
 /**
- * Discrete MIQP surrogate for 4-RoSy cross fields (MIQ phase 1, Bommes et al. 2009).
+ * Small mixed-integer least-squares solver for pairwise difference constraints.
  *
- *   min_{θ,p} Σ_e (θ_{f1} - θ_{f2} + (π/2)·p_e)²,   p_e ∈ ℤ
+ *   min_{x,z} Σ_c (x_i - x_j + scale * z_c)^2,   z_c ∈ Z
  *
- * Solver:
- *   1. Alternating optimization — fix p, linear solve for θ; fix θ, round p.
- *   2. Coordinate descent on p with θ re-solved per candidate.
- *
- * Mesh-agnostic: supply internal face–face edges only (f1, f2 >= 0).
+ * This class deliberately knows nothing about application-specific geometry.
+ * Callers are responsible for mapping their problem to constraints.
  */
 class CrossFieldIntegerProgram {
 public:
-    struct Edge {
-        int f1 = -1;
-        int f2 = -1;
+    struct Constraint {
+        int i = -1;
+        int j = -1;
         int idx = -1;
     };
 
-    CrossFieldIntegerProgram(int numFaces, std::vector<Edge> internalEdges);
+    CrossFieldIntegerProgram(int numVariables,
+                             std::vector<Constraint> constraints,
+                             double integerScale);
 
-    void setJumpBounds(int lo, int hi);
+    void setIntegerBounds(int lo, int hi);
     void setAlternatingIterations(int iters) { alternatingIters_ = iters; }
     void setRefinePasses(int passes) { refinePasses_ = passes; }
 
-    /** Run alternating + refinement; updates theta and jump in place. */
-    bool solve(Eigen::VectorXd& theta, Eigen::VectorXi& jump);
+    /** Run alternating + refinement; updates variables and integers in place. */
+    bool solve(Eigen::VectorXd& variables, Eigen::VectorXi& integers);
 
-    double energy(const Eigen::VectorXd& theta, const Eigen::VectorXi& jump) const;
+    double energy(const Eigen::VectorXd& variables, const Eigen::VectorXi& integers) const;
 
-    int numFaces() const { return nF_; }
-    int numEdges() const { return nE_; }
+    int numVariables() const { return nVars_; }
+    int numConstraints() const { return nConstraints_; }
 
 private:
-    void buildFaceLaplacian(Eigen::SparseMatrix<double>& L) const;
-    bool solveThetaGivenJumps(
-        const Eigen::VectorXi& jump,
-        Eigen::VectorXd& outTheta) const;
-    bool optimizeAlternating(Eigen::VectorXd& theta, Eigen::VectorXi& jump);
-    void refineJumpsCoordinateDescent(Eigen::VectorXd& theta, Eigen::VectorXi& jump);
-    void wrapThetaToQuarterTurn(Eigen::VectorXd& theta) const;
+    void buildDifferenceLaplacian(Eigen::SparseMatrix<double>& L) const;
+    bool solveVariablesGivenIntegers(
+        const Eigen::VectorXi& integers,
+        Eigen::VectorXd& outVariables) const;
+    bool optimizeAlternating(Eigen::VectorXd& variables, Eigen::VectorXi& integers);
+    void refineIntegersCoordinateDescent(Eigen::VectorXd& variables, Eigen::VectorXi& integers);
 
     static int roundToInt(double x);
 
-    int nF_ = 0;
-    int nE_ = 0;
-    std::vector<Edge> edges_;
+    int nVars_ = 0;
+    int nConstraints_ = 0;
+    double integerScale_ = 1.0;
+    std::vector<Constraint> constraints_;
 
-    int jumpLo_ = -4;
-    int jumpHi_ = 4;
+    int integerLo_ = -4;
+    int integerHi_ = 4;
     int alternatingIters_ = 12;
     int refinePasses_ = 2;
 
-    mutable Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> faceSolver_;
-    mutable bool faceSolverReady_ = false;
-    mutable Eigen::SparseMatrix<double> faceLaplacian_;
+    mutable Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> variableSolver_;
+    mutable bool variableSolverReady_ = false;
+    mutable Eigen::SparseMatrix<double> variableLaplacian_;
 };
 
 #endif

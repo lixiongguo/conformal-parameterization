@@ -1,4 +1,4 @@
-#include "geometry/QcError.h"
+#include "QcError.h"
 #include <Eigen/SVD>
 
 double QuasiConformalError::compute(std::vector<Eigen::Vector3d> p, std::vector<Eigen::Vector3d> q)

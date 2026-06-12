@@ -5,24 +5,24 @@
 
 using namespace Eigen;
 
-namespace {
-constexpr double kQuarterTurn = M_PI / 2.0;
-} // namespace
-
-CrossFieldIntegerProgram::CrossFieldIntegerProgram(int numFaces, std::vector<Edge> internalEdges)
-    : nF_(numFaces)
-    , edges_(std::move(internalEdges))
+CrossFieldIntegerProgram::CrossFieldIntegerProgram(
+    int numVariables,
+    std::vector<Constraint> constraints,
+    double integerScale)
+    : nVars_(numVariables)
+    , integerScale_(integerScale)
+    , constraints_(std::move(constraints))
 {
-    nE_ = static_cast<int>(edges_.size());
-    for (int i = 0; i < nE_; ++i) {
-        edges_[static_cast<size_t>(i)].idx = i;
+    nConstraints_ = static_cast<int>(constraints_.size());
+    for (int i = 0; i < nConstraints_; ++i) {
+        constraints_[static_cast<size_t>(i)].idx = i;
     }
 }
 
-void CrossFieldIntegerProgram::setJumpBounds(int lo, int hi)
+void CrossFieldIntegerProgram::setIntegerBounds(int lo, int hi)
 {
-    jumpLo_ = lo;
-    jumpHi_ = hi;
+    integerLo_ = lo;
+    integerHi_ = hi;
 }
 
 int CrossFieldIntegerProgram::roundToInt(double x)
@@ -30,140 +30,131 @@ int CrossFieldIntegerProgram::roundToInt(double x)
     return static_cast<int>(std::floor(x + 0.5));
 }
 
-void CrossFieldIntegerProgram::buildFaceLaplacian(SparseMatrix<double>& L) const
+void CrossFieldIntegerProgram::buildDifferenceLaplacian(SparseMatrix<double>& L) const
 {
-    L.resize(nF_, nF_);
+    L.resize(nVars_, nVars_);
     std::vector<Triplet<double>> trips;
-    VectorXd diag = VectorXd::Zero(nF_);
+    VectorXd diag = VectorXd::Zero(nVars_);
 
-    for (const auto& e : edges_) {
-        if (e.f1 < 0 || e.f2 < 0) continue;
-        trips.emplace_back(e.f1, e.f2, -1.0);
-        trips.emplace_back(e.f2, e.f1, -1.0);
-        diag(e.f1) += 1.0;
-        diag(e.f2) += 1.0;
+    for (const auto& c : constraints_) {
+        if (c.i < 0 || c.j < 0) continue;
+        trips.emplace_back(c.i, c.j, -1.0);
+        trips.emplace_back(c.j, c.i, -1.0);
+        diag(c.i) += 1.0;
+        diag(c.j) += 1.0;
     }
-    for (int i = 0; i < nF_; ++i) {
+    for (int i = 0; i < nVars_; ++i) {
         trips.emplace_back(i, i, diag(i) + 1e-8);
     }
     L.setFromTriplets(trips.begin(), trips.end());
 }
 
-double CrossFieldIntegerProgram::energy(const VectorXd& theta, const VectorXi& jump) const
+double CrossFieldIntegerProgram::energy(const VectorXd& variables, const VectorXi& integers) const
 {
     double E = 0.0;
-    for (const auto& e : edges_) {
-        if (e.f1 < 0 || e.f2 < 0) continue;
-        const double r = theta(e.f1) - theta(e.f2) + kQuarterTurn * static_cast<double>(jump(e.idx));
+    for (const auto& c : constraints_) {
+        if (c.i < 0 || c.j < 0) continue;
+        const double r = variables(c.i) - variables(c.j) +
+                         integerScale_ * static_cast<double>(integers(c.idx));
         E += r * r;
     }
     return E;
 }
 
-bool CrossFieldIntegerProgram::solveThetaGivenJumps(
-    const VectorXi& jump,
-    VectorXd& outTheta) const
+bool CrossFieldIntegerProgram::solveVariablesGivenIntegers(
+    const VectorXi& integers,
+    VectorXd& outVariables) const
 {
-    if (!faceSolverReady_) {
-        faceSolver_.compute(faceLaplacian_);
-        if (faceSolver_.info() != Success) return false;
-        faceSolverReady_ = true;
+    if (!variableSolverReady_) {
+        variableSolver_.compute(variableLaplacian_);
+        if (variableSolver_.info() != Success) return false;
+        variableSolverReady_ = true;
     }
 
-    VectorXd b = VectorXd::Zero(nF_);
-    for (const auto& e : edges_) {
-        if (e.f1 < 0 || e.f2 < 0) continue;
-        const double p = static_cast<double>(jump(e.idx));
-        b(e.f1) -= kQuarterTurn * p;
-        b(e.f2) += kQuarterTurn * p;
+    VectorXd b = VectorXd::Zero(nVars_);
+    for (const auto& c : constraints_) {
+        if (c.i < 0 || c.j < 0) continue;
+        const double z = static_cast<double>(integers(c.idx));
+        b(c.i) -= integerScale_ * z;
+        b(c.j) += integerScale_ * z;
     }
 
-    outTheta = faceSolver_.solve(b);
-    return faceSolver_.info() == Success && outTheta.size() == nF_;
+    outVariables = variableSolver_.solve(b);
+    return variableSolver_.info() == Success && outVariables.size() == nVars_;
 }
 
-void CrossFieldIntegerProgram::wrapThetaToQuarterTurn(VectorXd& theta) const
+bool CrossFieldIntegerProgram::optimizeAlternating(VectorXd& variables, VectorXi& integers)
 {
-    for (int i = 0; i < nF_; ++i) {
-        theta(i) = std::fmod(theta(i), kQuarterTurn);
-        if (theta(i) < 0) theta(i) += kQuarterTurn;
-    }
-}
+    buildDifferenceLaplacian(variableLaplacian_);
+    variableSolverReady_ = false;
+    variableSolver_.compute(variableLaplacian_);
+    if (variableSolver_.info() != Success) return false;
+    variableSolverReady_ = true;
 
-bool CrossFieldIntegerProgram::optimizeAlternating(VectorXd& theta, VectorXi& jump)
-{
-    buildFaceLaplacian(faceLaplacian_);
-    faceSolverReady_ = false;
-    faceSolver_.compute(faceLaplacian_);
-    if (faceSolver_.info() != Success) return false;
-    faceSolverReady_ = true;
-
-    VectorXd newTheta(nF_);
+    VectorXd newVariables(nVars_);
 
     for (int iter = 0; iter < alternatingIters_; ++iter) {
-        if (!solveThetaGivenJumps(jump, newTheta)) return false;
+        if (!solveVariablesGivenIntegers(integers, newVariables)) return false;
 
-        for (const auto& e : edges_) {
-            if (e.f1 < 0 || e.f2 < 0) continue;
-            const double diff = newTheta(e.f2) - newTheta(e.f1);
-            int p = roundToInt(diff / kQuarterTurn);
-            p = std::max(jumpLo_, std::min(jumpHi_, p));
-            jump(e.idx) = p;
+        for (const auto& c : constraints_) {
+            if (c.i < 0 || c.j < 0) continue;
+            const double diff = newVariables(c.j) - newVariables(c.i);
+            int z = roundToInt(diff / integerScale_);
+            z = std::max(integerLo_, std::min(integerHi_, z));
+            integers(c.idx) = z;
         }
 
-        const double change = (newTheta - theta).norm();
-        theta = newTheta;
+        const double change = (newVariables - variables).norm();
+        variables = newVariables;
         if (change < 1e-6) break;
     }
 
-    wrapThetaToQuarterTurn(theta);
     return true;
 }
 
-void CrossFieldIntegerProgram::refineJumpsCoordinateDescent(VectorXd& theta, VectorXi& jump)
+void CrossFieldIntegerProgram::refineIntegersCoordinateDescent(VectorXd& variables, VectorXi& integers)
 {
-    VectorXd trialTheta(nF_);
+    VectorXd trialVariables(nVars_);
 
     for (int pass = 0; pass < refinePasses_; ++pass) {
         bool improved = false;
 
-        for (const auto& e : edges_) {
-            if (e.f1 < 0 || e.f2 < 0) continue;
+        for (const auto& c : constraints_) {
+            if (c.i < 0 || c.j < 0) continue;
 
-            const int saved = jump(e.idx);
-            int bestP = saved;
+            const int saved = integers(c.idx);
+            int bestZ = saved;
             double bestE = std::numeric_limits<double>::infinity();
 
-            for (int cand = jumpLo_; cand <= jumpHi_; ++cand) {
-                jump(e.idx) = cand;
-                if (!solveThetaGivenJumps(jump, trialTheta)) continue;
-                const double E = energy(trialTheta, jump);
+            for (int cand = integerLo_; cand <= integerHi_; ++cand) {
+                integers(c.idx) = cand;
+                if (!solveVariablesGivenIntegers(integers, trialVariables)) continue;
+                const double E = energy(trialVariables, integers);
                 if (E < bestE) {
                     bestE = E;
-                    bestP = cand;
+                    bestZ = cand;
                 }
             }
 
-            jump(e.idx) = bestP;
-            if (bestP != saved) improved = true;
+            integers(c.idx) = bestZ;
+            if (bestZ != saved) improved = true;
         }
 
-        solveThetaGivenJumps(jump, theta);
+        solveVariablesGivenIntegers(integers, variables);
         if (!improved) break;
     }
-
-    wrapThetaToQuarterTurn(theta);
 }
 
-bool CrossFieldIntegerProgram::solve(VectorXd& theta, VectorXi& jump)
+bool CrossFieldIntegerProgram::solve(VectorXd& variables, VectorXi& integers)
 {
-    if (nF_ < 1 || theta.size() != nF_) return false;
-    if (jump.size() != nE_) {
-        jump.resize(nE_);
-        jump.setZero();
+    if (nVars_ < 1 || variables.size() != nVars_) return false;
+    if (integerScale_ == 0.0) return false;
+    if (integers.size() != nConstraints_) {
+        integers.resize(nConstraints_);
+        integers.setZero();
     }
 
-    if (!optimizeAlternating(theta, jump)) return false;
-    refineJumpsCoordinateDescent(theta, jump);
+    if (!optimizeAlternating(variables, integers)) return false;
+    refineIntegersCoordinateDescent(variables, integers);
     return true;
 }

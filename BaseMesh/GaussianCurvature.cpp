@@ -1,9 +1,9 @@
 #include "GaussianCurvature.h"
 
-#include "../Mesh.h"
-#include "../Vertex.h"
-#include "../Face.h"
-#include "../HalfEdge.h"
+#include "Mesh.h"
+#include "Vertex.h"
+#include "Face.h"
+#include "HalfEdge.h"
 
 #include <cmath>
 #include <vector>
