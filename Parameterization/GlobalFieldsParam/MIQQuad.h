@@ -6,7 +6,7 @@
 
 #include "GlobalFieldsParameterization.h"
 
-#include "CrossFieldIntegerProgram.h"
+#include "MixedIntegerProgram.h"
 
 #include <Eigen/SparseCholesky>
 #include <memory>
@@ -19,7 +19,7 @@
 
  *
 
- * Phase 1 — CrossFieldIntegerProgram on face angles θ and edge jumps p.
+ * Phase 1 — MixedIntegerProgram on face angles theta and edge jumps p.
 
  * Phase 2 — Poisson parameterization aligned to the optimized 4-RoSy field.
 
@@ -79,7 +79,7 @@ protected:
 
     bool solveCrossFieldIP();
 
-    std::vector<CrossFieldIntegerProgram::Constraint> buildFaceAdjacencyConstraints() const;
+    std::vector<MixedIntegerProgram::Constraint> buildFaceAdjacencyConstraints() const;
 
     void wrapCrossFieldAngles();
 
@@ -135,7 +135,7 @@ protected:
 
 
 
-    std::unique_ptr<CrossFieldIntegerProgram> crossFieldIP_;
+    std::unique_ptr<MixedIntegerProgram> mixedIntegerProgram_;
 
 };
 

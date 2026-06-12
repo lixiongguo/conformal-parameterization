@@ -82,7 +82,7 @@ bool MIQQuad::initMeshData()
     jump.resize(nE);
     jump.setZero();
 
-    crossFieldIP_.reset();
+    mixedIntegerProgram_.reset();
     return true;
 }
 
@@ -120,13 +120,13 @@ void MIQQuad::initCrossField()
     }
 }
 
-std::vector<CrossFieldIntegerProgram::Constraint> MIQQuad::buildFaceAdjacencyConstraints() const
+std::vector<MixedIntegerProgram::Constraint> MIQQuad::buildFaceAdjacencyConstraints() const
 {
-    std::vector<CrossFieldIntegerProgram::Constraint> constraints;
+    std::vector<MixedIntegerProgram::Constraint> constraints;
     constraints.reserve(edgeList.size());
     for (const auto& e : edgeList) {
         if (e.f1 < 0 || e.f2 < 0) continue;
-        CrossFieldIntegerProgram::Constraint c;
+        MixedIntegerProgram::Constraint c;
         c.i = e.f1;
         c.j = e.f2;
         c.idx = e.idx;
@@ -137,21 +137,21 @@ std::vector<CrossFieldIntegerProgram::Constraint> MIQQuad::buildFaceAdjacencyCon
 
 double MIQQuad::crossFieldEnergy() const
 {
-    if (!crossFieldIP_) return 0.0;
-    return crossFieldIP_->energy(theta, jump);
+    if (!mixedIntegerProgram_) return 0.0;
+    return mixedIntegerProgram_->energy(theta, jump);
 }
 
 bool MIQQuad::solveCrossFieldIP()
 {
     auto constraints = buildFaceAdjacencyConstraints();
-    crossFieldIP_ = std::make_unique<CrossFieldIntegerProgram>(
+    mixedIntegerProgram_ = std::make_unique<MixedIntegerProgram>(
         nF,
         std::move(constraints),
         kQuarterTurn);
-    crossFieldIP_->setIntegerBounds(jumpLo_, jumpHi_);
-    crossFieldIP_->setAlternatingIterations(crossIters_);
-    crossFieldIP_->setRefinePasses(jumpRefinePasses_);
-    if (!crossFieldIP_->solve(theta, jump)) {
+    mixedIntegerProgram_->setIntegerBounds(jumpLo_, jumpHi_);
+    mixedIntegerProgram_->setAlternatingIterations(crossIters_);
+    mixedIntegerProgram_->setRefinePasses(jumpRefinePasses_);
+    if (!mixedIntegerProgram_->solve(theta, jump)) {
         return false;
     }
 

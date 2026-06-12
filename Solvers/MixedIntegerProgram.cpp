@@ -1,11 +1,11 @@
-#include "CrossFieldIntegerProgram.h"
+#include "MixedIntegerProgram.h"
+#include <algorithm>
 #include <cmath>
 #include <limits>
-#include <algorithm>
 
 using namespace Eigen;
 
-CrossFieldIntegerProgram::CrossFieldIntegerProgram(
+MixedIntegerProgram::MixedIntegerProgram(
     int numVariables,
     std::vector<Constraint> constraints,
     double integerScale)
@@ -19,20 +19,20 @@ CrossFieldIntegerProgram::CrossFieldIntegerProgram(
     }
 }
 
-void CrossFieldIntegerProgram::setIntegerBounds(int lo, int hi)
+void MixedIntegerProgram::setIntegerBounds(int lo, int hi)
 {
     integerLo_ = lo;
     integerHi_ = hi;
 }
 
-int CrossFieldIntegerProgram::roundToInt(double x)
+int MixedIntegerProgram::roundToInt(double x)
 {
     return static_cast<int>(std::floor(x + 0.5));
 }
 
-void CrossFieldIntegerProgram::buildDifferenceLaplacian(SparseMatrix<double>& L) const
+void MixedIntegerProgram::buildNormalMatrix(SparseMatrix<double>& A) const
 {
-    L.resize(nVars_, nVars_);
+    A.resize(nVars_, nVars_);
     std::vector<Triplet<double>> trips;
     VectorXd diag = VectorXd::Zero(nVars_);
 
@@ -46,10 +46,10 @@ void CrossFieldIntegerProgram::buildDifferenceLaplacian(SparseMatrix<double>& L)
     for (int i = 0; i < nVars_; ++i) {
         trips.emplace_back(i, i, diag(i) + 1e-8);
     }
-    L.setFromTriplets(trips.begin(), trips.end());
+    A.setFromTriplets(trips.begin(), trips.end());
 }
 
-double CrossFieldIntegerProgram::energy(const VectorXd& variables, const VectorXi& integers) const
+double MixedIntegerProgram::energy(const VectorXd& variables, const VectorXi& integers) const
 {
     double E = 0.0;
     for (const auto& c : constraints_) {
@@ -61,12 +61,12 @@ double CrossFieldIntegerProgram::energy(const VectorXd& variables, const VectorX
     return E;
 }
 
-bool CrossFieldIntegerProgram::solveVariablesGivenIntegers(
+bool MixedIntegerProgram::solveVariablesGivenIntegers(
     const VectorXi& integers,
     VectorXd& outVariables) const
 {
     if (!variableSolverReady_) {
-        variableSolver_.compute(variableLaplacian_);
+        variableSolver_.compute(normalMatrix_);
         if (variableSolver_.info() != Success) return false;
         variableSolverReady_ = true;
     }
@@ -83,11 +83,11 @@ bool CrossFieldIntegerProgram::solveVariablesGivenIntegers(
     return variableSolver_.info() == Success && outVariables.size() == nVars_;
 }
 
-bool CrossFieldIntegerProgram::optimizeAlternating(VectorXd& variables, VectorXi& integers)
+bool MixedIntegerProgram::optimizeAlternating(VectorXd& variables, VectorXi& integers)
 {
-    buildDifferenceLaplacian(variableLaplacian_);
+    buildNormalMatrix(normalMatrix_);
     variableSolverReady_ = false;
-    variableSolver_.compute(variableLaplacian_);
+    variableSolver_.compute(normalMatrix_);
     if (variableSolver_.info() != Success) return false;
     variableSolverReady_ = true;
 
@@ -112,7 +112,7 @@ bool CrossFieldIntegerProgram::optimizeAlternating(VectorXd& variables, VectorXi
     return true;
 }
 
-void CrossFieldIntegerProgram::refineIntegersCoordinateDescent(VectorXd& variables, VectorXi& integers)
+void MixedIntegerProgram::refineIntegersCoordinateDescent(VectorXd& variables, VectorXi& integers)
 {
     VectorXd trialVariables(nVars_);
 
@@ -145,7 +145,7 @@ void CrossFieldIntegerProgram::refineIntegersCoordinateDescent(VectorXd& variabl
     }
 }
 
-bool CrossFieldIntegerProgram::solve(VectorXd& variables, VectorXi& integers)
+bool MixedIntegerProgram::solve(VectorXd& variables, VectorXi& integers)
 {
     if (nVars_ < 1 || variables.size() != nVars_) return false;
     if (integerScale_ == 0.0) return false;

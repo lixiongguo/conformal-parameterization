@@ -1,5 +1,5 @@
-#ifndef CROSSFIELDINTEGERPROGRAM_H
-#define CROSSFIELDINTEGERPROGRAM_H
+#ifndef MIXEDINTEGERPROGRAM_H
+#define MIXEDINTEGERPROGRAM_H
 
 #include <Eigen/Dense>
 #include <Eigen/SparseCholesky>
@@ -8,12 +8,12 @@
 /**
  * Small mixed-integer least-squares solver for pairwise difference constraints.
  *
- *   min_{x,z} Σ_c (x_i - x_j + scale * z_c)^2,   z_c ∈ Z
+ *   min_{x,z} sum_c (x_i - x_j + scale * z_c)^2,   z_c in Z
  *
  * This class deliberately knows nothing about application-specific geometry.
  * Callers are responsible for mapping their problem to constraints.
  */
-class CrossFieldIntegerProgram {
+class MixedIntegerProgram {
 public:
     struct Constraint {
         int i = -1;
@@ -21,9 +21,9 @@ public:
         int idx = -1;
     };
 
-    CrossFieldIntegerProgram(int numVariables,
-                             std::vector<Constraint> constraints,
-                             double integerScale);
+    MixedIntegerProgram(int numVariables,
+                        std::vector<Constraint> constraints,
+                        double integerScale);
 
     void setIntegerBounds(int lo, int hi);
     void setAlternatingIterations(int iters) { alternatingIters_ = iters; }
@@ -38,7 +38,7 @@ public:
     int numConstraints() const { return nConstraints_; }
 
 private:
-    void buildDifferenceLaplacian(Eigen::SparseMatrix<double>& L) const;
+    void buildNormalMatrix(Eigen::SparseMatrix<double>& A) const;
     bool solveVariablesGivenIntegers(
         const Eigen::VectorXi& integers,
         Eigen::VectorXd& outVariables) const;
@@ -59,7 +59,7 @@ private:
 
     mutable Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> variableSolver_;
     mutable bool variableSolverReady_ = false;
-    mutable Eigen::SparseMatrix<double> variableLaplacian_;
+    mutable Eigen::SparseMatrix<double> normalMatrix_;
 };
 
 #endif
