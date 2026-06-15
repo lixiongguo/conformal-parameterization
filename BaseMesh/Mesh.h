@@ -21,9 +21,6 @@ public:
     // write mesh to file
     bool write(const std::string& fileName) const;
     
-    // computes conformal parameterization
-    double parameterize(int mode, int optScheme = NEWTON);
-    
     // delaunayize
     void delaunayize();
     
