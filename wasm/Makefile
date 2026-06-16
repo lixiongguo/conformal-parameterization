@@ -85,6 +85,13 @@ SIMPLE_COMPAT_INC := -I$(EIGEN_PATH) -I../BaseMesh -I../Parameterization \
                      -I../Parameterization/SimpleParam/ARAP \
                      -I../Solvers -I../Solvers/Mosek
 
+# ========== BD-HM (Bounded Distortion Harmonic Map) ==========
+BDHM_SRCS      := ../../bdhm/BoundedDistortionHarmonicMap.cpp \
+                  ../../cauchy_coordinates/CauchyCoordinates.cpp \
+                  ../../Solvers/Lbfgs.cpp \
+                  ../../Solvers/Solver.cpp
+BDHM_INC       := -I$(EIGEN_PATH) -I../../bdhm -I../../cauchy_coordinates -I../../Solvers -I../../Solvers/Mosek -I../BaseMesh
+
 # ========== Include paths per module ==========
 BASEMESH_INC  := -I$(EIGEN_PATH) -I../BaseMesh -I../Parameterization
 CUTSEAM_INC   := -I$(EIGEN_PATH) -I../BaseMesh -I../CutSeamMesh -I../Parameterization
@@ -97,10 +104,10 @@ BD_LSCM_INC   := -I$(EIGEN_PATH) -I../BaseMesh -I../Parameterization -I../Parame
 # ========== Build targets ==========
 .PHONY: build-base-mesh build-cutseam-mesh build-solver \
         build-lscm build-abf build-arap build-bd-lscm \
-        build-dgp-compat build-simple-compat \
+        build-dgp-compat build-simple-compat build-bdhm \
         build-all clean check help
 
-build-all: build-base-mesh build-cutseam-mesh build-solver build-lscm build-abf build-arap build-bd-lscm build-dgp-compat build-simple-compat
+build-all: build-base-mesh build-cutseam-mesh build-solver build-lscm build-abf build-arap build-bd-lscm build-dgp-compat build-simple-compat build-bdhm
 
 # --- BaseMesh ---
 build-base-mesh: $(OUTPUT_DIR)/base_mesh.js
@@ -185,6 +192,15 @@ $(OUTPUT_DIR)/uv_unwrap_simple.js: bindings_uv_unwrap_simple_compat.cpp $(SIMPLE
 	       -o $@ $(EM_FLAGS_COMPAT) -s EXPORT_NAME="UvUnwrapSimpleSolver"
 	@echo "[Simple-Compat] Done → $@"
 
+# --- BD-HM (Bounded Distortion Harmonic Map) ---
+build-bdhm: $(OUTPUT_DIR)/bdhm.js
+$(OUTPUT_DIR)/bdhm.js: bindings_bdhm.cpp $(BDHM_SRCS)
+	@mkdir -p $(OUTPUT_DIR)
+	@echo "[BDHM] Compiling..."
+	$(CXX) $(CXXFLAGS) $(BDHM_INC) bindings_bdhm.cpp $(BDHM_SRCS) \
+	       -o $@ $(EM_FLAGS) -s EXPORT_NAME="BDHMModule"
+	@echo "[BDHM] Done → $@"
+
 # ========== Utility ==========
 clean:
 	@echo "Cleaning WASM outputs..."
@@ -197,6 +213,7 @@ clean:
 	-rm -f $(OUTPUT_DIR)/bd_lscm.js $(OUTPUT_DIR)/bd_lscm.wasm
 	-rm -f $(OUTPUT_DIR)/dgp_basic.js $(OUTPUT_DIR)/dgp_basic.wasm
 	-rm -f $(OUTPUT_DIR)/uv_unwrap_simple.js $(OUTPUT_DIR)/uv_unwrap_simple.wasm
+	-rm -f $(OUTPUT_DIR)/bdhm.js $(OUTPUT_DIR)/bdhm.wasm
 	@echo "Done."
 
 check:
@@ -222,7 +239,8 @@ help:
 	@echo "  make build-bd-lscm         Build BD-LSCM module (LSCM + Bounded Distortion)"
 	@echo "  make build-dgp-compat      Build dgp_basic compat (Gauss curvature, ccall)"
 	@echo "  make build-simple-compat   Build uv_unwrap_simple compat (all methods, ccall)"
-	@echo "  make build-all             Build all 9 modules"
+	@echo "  make build-bdhm            Build BD-HM module (Bounded Distortion Harmonic Map)"
+	@echo "  make build-all             Build all 10 modules"
 	@echo "  make clean                 Remove outputs"
 	@echo "  make check                 Verify toolchain"
 	@echo ""
