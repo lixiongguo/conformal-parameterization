@@ -8,7 +8,12 @@
 /**
  * Small mixed-integer least-squares solver for pairwise difference constraints.
  *
- *   min_{x,z} sum_c (x_i - x_j + scale * z_c)^2,   z_c in Z
+ *   min_{x,z} sum_c (x_i - x_j + kappa_c + scale * z_c)^2,   z_c in Z
+ *
+ * kappa_c is the base rotation between the local coordinate frames of face i
+ * and face j.  It is a fixed constant per constraint — callers must compute
+ * it from geometry (e.g. the angle of the shared edge expressed in each face's
+ * tangent frame).
  *
  * This class deliberately knows nothing about application-specific geometry.
  * Callers are responsible for mapping their problem to constraints.
@@ -19,6 +24,7 @@ public:
         int i = -1;
         int j = -1;
         int idx = -1;
+        double kappa = 0.0;   ///< base rotation  i→j  (θ_i + κ_ij − θ_j + s·z ≈ 0)
     };
 
     MixedIntegerProgram(int numVariables,

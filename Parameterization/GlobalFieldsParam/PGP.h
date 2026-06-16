@@ -8,21 +8,17 @@
 /**
  * PGP: Periodic Global Parameterization (Ray et al. 2006).
  *
- * Inputs:
- *   1. Triangle mesh — provided via Mesh& in the constructor.
- *   2. 4-RoSy cross field — one unit direction per face (optional;
- *      if omitted, estimated from principal curvature).
- *
- * Output: per-vertex UV (mesh.vertices[i].uv) after parameterize().
+ * Uses alternative variables U_i=(cosθ_i, sinθ_i), V_i=(cosφ_i, sinφ_i)
+ * on vertices to bake in 2π-periodicity.  π/2 rotational ambiguity is
+ * handled by locally reorienting control vector fields per triangle.
  *
  * Algorithm:
- *   1. Extract mesh data (Eigen format), build per-face local frames.
- *   2. Get/estimate cross field directions d_T^u, d_T^v per face.
- *   3. Alternating optimization:
- *      a) Fix integer variables k_T, p_T → solve linear system for (u, v)
- *      b) Fix (u, v) → per-face greedy rounding of k_T, p_T
- *      c) Local ±1 search on p_T to reduce energy
- *   4. Write UV to mesh and normalize.
+ *   1. Mesh extraction, local frames, cross field
+ *   2. Per-vertex rotation indices r_i from vector field alignment
+ *   3. Build quadratic energy in U,V (edge-based with triangle integration)
+ *   4. Linear solve → Newton iteration with norm-enforcing penalty
+ *   5. Reconstruct (θ,φ) per triangle (Algorithm 1 from paper)
+ *   6. BFS-propagate consistent UV and write to mesh
  */
 class PGP : public GlobalFieldsParameterization {
 public:
@@ -30,85 +26,105 @@ public:
 
     void parameterize() override;
 
-    // setCrossField() is inherited from GlobalFieldsParameterization
+    /** Chart size parameter ω (default 10× average edge length). */
+    void setOmega(double w) { omega = w; }
 
-    /** Number of alternating optimization iterations (default 3). */
-    void setMaxIterations(int iters) { maxIters = iters; }
+    /** Penalty weight for unit-norm constraint (default 1e-3). */
+    void setPenaltyWeight(double eps) { penaltyEps = eps; }
 
-    /** Enable/disable local search on period jumps (default true). */
-    void setLocalSearch(bool enable) { doLocalSearch = enable; }
+    /** Maximum Newton outer iterations (default 5). */
+    void setMaxNewtonIters(int iters) { maxNewtonIters = iters; }
 
 protected:
     struct InternalEdge {
-        int v1, v2;      // vertex indices
-        int f1, f2;      // adjacent face indices
-        int idx;         // edge index
+        int v1, v2;
+        int f1, f2;
+        int idx;
     };
 
     // --- Mesh extraction ---
     bool initMeshData();
-
-    // --- Cross field ---
-    void computeCrossField();
-
-    // --- Local geometry ---
     void buildLocalFrames();
     void buildLocalFrame(const Eigen::Vector3d& n,
                          Eigen::Vector3d& t1,
                          Eigen::Vector3d& t2);
+    void computeCrossField();
 
-    // --- Linear system ---
-    void assembleLaplacian(Eigen::SparseMatrix<double>& L);
-    void assembleRHS(const Eigen::VectorXi& kT,
-                     const Eigen::MatrixXi& pT,
-                     Eigen::VectorXd& bu,
-                     Eigen::VectorXd& bv);
-    void solveForUV(const Eigen::VectorXi& kT,
-                    const Eigen::MatrixXi& pT,
-                    Eigen::VectorXd& u,
-                    Eigen::VectorXd& v);
-    Eigen::Vector2d computeGradient(const Eigen::VectorXd& u, int f) const;
+    // --- Vertex rotations ---
+    void computeVertexRotations();
 
-    // --- Per-face integer optimization ---
-    double faceEnergy(int f, const Eigen::Vector2d& gu, const Eigen::Vector2d& gv,
-                      int k, const Eigen::Vector2i& p) const;
-    void optimizePerFace(const Eigen::VectorXd& u, const Eigen::VectorXd& v,
-                         Eigen::VectorXi& kT, Eigen::MatrixXi& pT);
-    void localSearchP(const Eigen::VectorXd& u, const Eigen::VectorXd& v,
-                      Eigen::VectorXi& kT, Eigen::MatrixXi& pT);
+    // --- Quadratic energy in (U,V) space ---
+    void assembleSystemUV(
+        Eigen::SparseMatrix<double>&  A,
+        Eigen::VectorXd&              b,
+        const std::vector<Eigen::Vector2d>& Ucur,
+        const std::vector<Eigen::Vector2d>& Vcur);
+
+    // --- Linear solve for initial guess ---
+    void solveLinearInitial();
+
+    // --- Newton iteration with penalty ---
+    double computePenalty();
+    void   addPenaltyGradientHessian(
+        Eigen::VectorXd& grad,
+        std::vector<Eigen::Triplet<double>>& hessTrips);
+    void   newtonSolve();
+
+    // --- Triangle integration weights (Appendix B, Eq 24) ---
+    Eigen::Vector3d computeLambda(int f) const;
+
+    // --- Per-triangle reconstruction (Algorithm 1) ---
+    void reconstructPerTriangle();
+    int  determineEdgeRotation(int f, int vA, int vB) const;
+
+    // --- Consistent UV propagation ---
+    void propagateUV();
 
     // --- Output ---
-    void writeUV(const Eigen::VectorXd& u, const Eigen::VectorXd& v);
+    void writeUV();
 
-    // --- Mesh data (Eigen format) ---
+    // --- Helpers ---
+    static Eigen::Vector2d rotateK(int k, const Eigen::Vector2d& v);
+    static Eigen::Matrix2d rotMat2(double angle);
+    Eigen::Vector2d  vecFieldAtVertexInFace(int f, int localVi, bool perp) const;
+
+    // --- Mesh data ---
     int nV, nF;
-    Eigen::MatrixXd vertPos;           // vertex positions (nV x 3)
-    Eigen::MatrixXi faceIndices;       // face → vertex indices (nF x 3)
-    std::vector<InternalEdge> edges;   // internal edges for cotan Laplacian
+    Eigen::MatrixXd vertPos;
+    Eigen::MatrixXi faceIndices;
+    std::vector<InternalEdge> edges;
 
     // --- Cross field ---
-    // faceDirs_ is inherited from GlobalFieldsParameterization
-    std::vector<Vector2d> faceD1;      // per-face d1 in 2D local frame (nF)
-    std::vector<Vector2d> faceD2;      // per-face d2 = rot90(d1) in 2D local frame (nF)
+    std::vector<Eigen::Vector2d> faceD1;   // per-face d1 in 2D local frame
+    std::vector<Eigen::Vector2d> faceD2;   // per-face d2 = rot90(d1)
 
     // --- Per-face geometry ---
-    Eigen::MatrixXd faceCenters;       // per-face centroid (nF x 3)
-    Eigen::MatrixXd faceNormals;       // per-face normal (nF x 3)
-    std::vector<Eigen::Matrix2d> faceGrad; // per-face gradient operator (G_T)
-    std::vector<double> faceAreas;     // per-face area
+    Eigen::MatrixXd faceNormals;
+    std::vector<Eigen::Matrix2d> faceGrad;  // G_T ∈ R^{2×3}
+    std::vector<double>  faceAreas;
+    // edge vectors in 2D local frame (nF × 3 edges)
+    std::vector<Eigen::Vector2d> faceEdges[3];
 
-    // --- Per-face integer variables ---
-    Eigen::VectorXi kVar;              // rotation index k_T ∈ {0,1,2,3}
-    Eigen::MatrixXi pVar;              // period jump p_T ∈ Z² (nF x 2)
+    // --- PGP alternative variables ---
+    std::vector<Eigen::Vector2d> U;       // U_i = (cos θ_i, sin θ_i)
+    std::vector<Eigen::Vector2d> V;       // V_i = (cos φ_i, sin φ_i)
 
-    // --- Sparse Cholesky solver ---
+    // --- Per-vertex rotation index ---
+    std::vector<int> vertexR;             // r_i ∈ {0,1,2,3}
+
+    // --- Reconstructed per-triangle coordinates ---
+    std::vector<Eigen::Vector3d> triTheta;  // per-triangle (θ_1,θ_2,θ_3)
+    std::vector<Eigen::Vector3d> triPhi;    // per-triangle (φ_1,φ_2,φ_3)
+    std::vector<int>            triRot;     // per-triangle r_T
+
+    // --- Sparse solver ---
     Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver;
     bool solverReady;
 
     // --- Options ---
-    int maxIters;
-    bool doLocalSearch;
-    // hasExternalField_ is inherited from GlobalFieldsParameterization
+    double omega;
+    double penaltyEps;
+    int    maxNewtonIters;
 };
 
 #endif

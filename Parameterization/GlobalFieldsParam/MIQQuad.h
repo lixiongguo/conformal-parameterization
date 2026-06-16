@@ -113,6 +113,10 @@ protected:
 
     Eigen::MatrixXd faceN;
 
+    Eigen::MatrixXd faceT1;   ///< first  tangent vector per face (nF×3)
+
+    Eigen::MatrixXd faceT2;   ///< second tangent vector per face (nF×3)
+
     Eigen::VectorXd theta;
 
     Eigen::VectorXi jump;

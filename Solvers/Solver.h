@@ -1,7 +1,11 @@
 #ifndef SOLVER_H
 #define SOLVER_H
 
-#include "Types.h"
+#include <Eigen/Core>
+#include <Eigen/SparseCore>
+#include <functional>
+#include <vector>
+
 using namespace std::placeholders;
 
 struct MeshHandle {
@@ -41,6 +45,12 @@ public:
     Eigen::VectorXd x;
     std::vector<double> obj;
     int n;
+    int maxIterations;
+    double energyTolerance;
+    double gradientTolerance;
+    double initialStep;
+    bool useInitialGuess;
+    bool verbose;
 };
 
 #endif

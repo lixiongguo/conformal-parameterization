@@ -1,17 +1,26 @@
 #include "Solver.h"
 #if defined(USE_MOSEK) && !defined(__EMSCRIPTEN__)
-#include "MosekSolver.h"
+#include "Mosek/MosekSolver.h"
 #else
-#include "MosekStub.h"
+#include "Mosek/MosekStub.h"
 #endif
+#include <algorithm>
 #include <deque>
+#include <cmath>
+#include <iostream>
 #include <Eigen/SparseCholesky>
 #define beta 0.9
 #define EPSILON 1e-9
 #define MAX_ITERS 10000
 
 Solver::Solver():
-n(0)
+n(0),
+maxIterations(MAX_ITERS),
+energyTolerance(EPSILON),
+gradientTolerance(0.0),
+initialStep(1.0),
+useInitialGuess(false),
+verbose(true)
 {
     obj.reserve(MAX_ITERS);
 }
@@ -19,8 +28,10 @@ n(0)
 void Solver::gradientDescent()
 {
     int k = 1;
-    double f = 0.0, tp = 1.0;
-    x = Eigen::VectorXd::Zero(n);
+    double f = 0.0, tp = initialStep;
+    if (!useInitialGuess || x.size() != n) {
+        x = Eigen::VectorXd::Zero(n);
+    }
     handle->computeEnergy(f, x);
     obj.clear(); obj.push_back(f);
     Eigen::VectorXd xp = Eigen::VectorXd::Zero(n);
@@ -34,6 +45,7 @@ void Solver::gradientDescent()
         // compute update direction
         Eigen::VectorXd g(n);
         handle->computeGradient(g, v);
+        if (gradientTolerance > 0.0 && g.norm() < gradientTolerance) break;
         
         // compute step size
         double t = tp;
@@ -57,10 +69,10 @@ void Solver::gradientDescent()
         k++;
 
         // check termination condition
-        if (fabs(f - fp) < EPSILON || k > MAX_ITERS) break;
+        if (fabs(f - fp) < energyTolerance || k > maxIterations) break;
     }
 
-    std::cout << "Iterations: " << k << std::endl;
+    if (verbose) std::cout << "Iterations: " << k << std::endl;
 }
 
 void solvePositiveDefinite(Eigen::VectorXd& x,
@@ -91,8 +103,8 @@ void Solver::newton()
         Eigen::VectorXd p;
         solvePositiveDefinite(p, g, H);
 
-        // 回退机制: 若 Cholesky 分解失败导致 p 含 NaN (如 Hessian 条件数过大),
-        // 则退回到梯度下降方向, 避免 NaN 污染 x 后被误判为"收敛"
+        // Fall back to the gradient direction if Cholesky fails and produces NaNs.
+        // This avoids treating a polluted iterate as convergence.
         if (!p.allFinite()) {
             p = g;  // fallback to gradient descent direction
         }
@@ -224,7 +236,9 @@ void Solver::lbfgs(int m)
 {
     int k = 0;
     double f = 0.0;
-    x = Eigen::VectorXd::Zero(n);
+    if (!useInitialGuess || x.size() != n) {
+        x = Eigen::VectorXd::Zero(n);
+    }
     handle->computeEnergy(f, x);
     obj.clear(); obj.push_back(f);
     Eigen::VectorXd g(n);
@@ -234,32 +248,47 @@ void Solver::lbfgs(int m)
     
     const double alpha = 1e-4;
     while (true) {
+        if (gradientTolerance > 0.0 && g.norm() < gradientTolerance) break;
+
         // compute update direction
         int l = std::min(k, m);
         Eigen::VectorXd q = -g;
         
         Eigen::VectorXd a(l);
         for (int i = l-1; i >= 0; i--) {
-            a(i) = s[i].dot(q) / y[i].dot(s[i]);
+            const double ys = y[i].dot(s[i]);
+            if (std::abs(ys) <= 1e-20) {
+                a(i) = 0.0;
+                continue;
+            }
+            a(i) = s[i].dot(q) / ys;
             q -= a(i)*y[i];
         }
         
         Eigen::VectorXd p = q;
-        if (l > 0) p *= y[l-1].dot(s[l-1]) / y[l-1].dot(y[l-1]);
+        if (l > 0) {
+            const double yy = y[l-1].dot(y[l-1]);
+            if (yy > 1e-20) {
+                p *= y[l-1].dot(s[l-1]) / yy;
+            }
+        }
         
         for (int i = 0; i < l; i++) {
-            double b = y[i].dot(p) / y[i].dot(s[i]);
+            const double ys = y[i].dot(s[i]);
+            if (std::abs(ys) <= 1e-20) continue;
+            double b = y[i].dot(p) / ys;
             p += (a(i) - b)*s[i];
         }
         
         // compute step size
-        double t = 1.0;
+        double t = initialStep;
         double fp = f;
         handle->computeEnergy(f, x + t*p);
-        while (f > fp + alpha*t*g.dot(p)) {
+        while (t > 1e-20 && f > fp + alpha*t*g.dot(p)) {
             t = beta*t;
             handle->computeEnergy(f, x + t*p);
         }
+        if (t <= 1e-20) break;
         
         // update
         Eigen::VectorXd xp = x;
@@ -278,8 +307,8 @@ void Solver::lbfgs(int m)
         y.push_back(g - gp);
         
         // check termination condition
-        if (fabs(f - fp) < EPSILON || k > MAX_ITERS) break;
+        if (fabs(f - fp) < energyTolerance || k > maxIterations) break;
     }
     
-    std::cout << "Iterations: " << k << std::endl;
+    if (verbose) std::cout << "Iterations: " << k << std::endl;
 }

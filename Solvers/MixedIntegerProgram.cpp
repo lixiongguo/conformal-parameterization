@@ -27,7 +27,7 @@ void MixedIntegerProgram::setIntegerBounds(int lo, int hi)
 
 int MixedIntegerProgram::roundToInt(double x)
 {
-    return static_cast<int>(std::floor(x + 0.5));
+    return static_cast<int>(std::round(x));
 }
 
 void MixedIntegerProgram::buildNormalMatrix(SparseMatrix<double>& A) const
@@ -43,6 +43,10 @@ void MixedIntegerProgram::buildNormalMatrix(SparseMatrix<double>& A) const
         diag(c.i) += 1.0;
         diag(c.j) += 1.0;
     }
+    // Pin the first variable to eliminate the Laplacian nullspace (constant shift).
+    // Without this, the system L·x = b is singular and the returned solution is
+    // defined only up to a global additive constant.
+    diag(0) += 1e6;
     for (int i = 0; i < nVars_; ++i) {
         trips.emplace_back(i, i, diag(i) + 1e-8);
     }
@@ -54,7 +58,7 @@ double MixedIntegerProgram::energy(const VectorXd& variables, const VectorXi& in
     double E = 0.0;
     for (const auto& c : constraints_) {
         if (c.i < 0 || c.j < 0) continue;
-        const double r = variables(c.i) - variables(c.j) +
+        const double r = variables(c.i) - variables(c.j) + c.kappa +
                          integerScale_ * static_cast<double>(integers(c.idx));
         E += r * r;
     }
@@ -75,9 +79,12 @@ bool MixedIntegerProgram::solveVariablesGivenIntegers(
     for (const auto& c : constraints_) {
         if (c.i < 0 || c.j < 0) continue;
         const double z = static_cast<double>(integers(c.idx));
-        b(c.i) -= integerScale_ * z;
-        b(c.j) += integerScale_ * z;
+        const double offset = integerScale_ * z + c.kappa;
+        b(c.i) -= offset;   //  from ∂/∂x_i  of  (x_i − x_j + κ + s·z)^2
+        b(c.j) += offset;
     }
+    // Pin variable 0 (its diagonal was boosted in buildNormalMatrix).
+    b(0) = 0.0;
 
     outVariables = variableSolver_.solve(b);
     return variableSolver_.info() == Success && outVariables.size() == nVars_;
@@ -98,8 +105,10 @@ bool MixedIntegerProgram::optimizeAlternating(VectorXd& variables, VectorXi& int
 
         for (const auto& c : constraints_) {
             if (c.i < 0 || c.j < 0) continue;
+            // Optimal integer given current continuous variables:
+            //   z* = round( (x_j − x_i − κ_ij) / scale )
             const double diff = newVariables(c.j) - newVariables(c.i);
-            int z = roundToInt(diff / integerScale_);
+            int z = roundToInt((diff - c.kappa) / integerScale_);
             z = std::max(integerLo_, std::min(integerHi_, z));
             integers(c.idx) = z;
         }

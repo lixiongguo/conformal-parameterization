@@ -89,6 +89,8 @@ bool MIQQuad::initMeshData()
 void MIQQuad::initCrossField()
 {
     faceN.resize(nF, 3);
+    faceT1.resize(nF, 3);
+    faceT2.resize(nF, 3);
     theta.resize(nF);
     theta.setZero();
 
@@ -104,6 +106,9 @@ void MIQQuad::initCrossField()
 
         Vector3d t1, t2;
         buildLocalFrame(fn, t1, t2);
+        faceT1.row(fi) = t1;   // store for kappa computation
+        faceT2.row(fi) = t2;
+
         const Vector3d e0 = p1 - p0;
         const Vector3d e1 = p2 - p1;
         const Vector3d e2 = p0 - p2;
@@ -111,8 +116,10 @@ void MIQQuad::initCrossField()
         const double l1 = e1.squaredNorm();
         const double l2 = e2.squaredNorm();
         Vector3d d;
-        if (l0 >= l1 && l0 >= l2) d = e0;
-        else if (l1 >= l0 && l1 >= l2) d = e1;
+        // Use strict > so that equilateral / isosceles triangles pick the
+        // same edge deterministically (first match wins).
+        if (l0 > l1 && l0 > l2) d = e0;
+        else if (l1 > l0 && l1 > l2) d = e1;
         else d = e2;
         const double dx = d.dot(t1);
         const double dy = d.dot(t2);
@@ -126,10 +133,27 @@ std::vector<MixedIntegerProgram::Constraint> MIQQuad::buildFaceAdjacencyConstrai
     constraints.reserve(edgeList.size());
     for (const auto& e : edgeList) {
         if (e.f1 < 0 || e.f2 < 0) continue;
+
+        // --- compute kappa: base rotation from face i's frame to face j's ---
+        // The shared edge direction, expressed in each face's local frame,
+        // gives the angle offset between the two coordinate systems.
+        const Vector3d edgeDir = (vertPos.row(e.v2) - vertPos.row(e.v1)).normalized();
+
+        const Vector3d t1i = faceT1.row(e.f1);
+        const Vector3d t2i = faceT2.row(e.f1);
+        const double alpha_i = std::atan2(edgeDir.dot(t2i), edgeDir.dot(t1i));
+
+        const Vector3d t1j = faceT1.row(e.f2);
+        const Vector3d t2j = faceT2.row(e.f2);
+        const double alpha_j = std::atan2(edgeDir.dot(t2j), edgeDir.dot(t1j));
+
+        const double kappa = alpha_j - alpha_i;
+
         MixedIntegerProgram::Constraint c;
         c.i = e.f1;
         c.j = e.f2;
         c.idx = e.idx;
+        c.kappa = kappa;
         constraints.push_back(c);
     }
     return constraints;
@@ -230,36 +254,12 @@ void MIQQuad::buildCotLaplacian(SparseMatrix<double>& L)
 
 void MIQQuad::solvePoisson()
 {
-    MatrixXd Vd1(nV, 3);
-    MatrixXd Vd2(nV, 3);
-    Vd1.setZero();
-    Vd2.setZero();
-    VectorXd vA = VectorXd::Zero(nV);
-
-    for (int fi = 0; fi < nF; ++fi) {
-        const int v0 = faces[fi * 3];
-        const int v1 = faces[fi * 3 + 1];
-        const int v2 = faces[fi * 3 + 2];
-        const Vector3d a = vertPos.row(v0);
-        const Vector3d b = vertPos.row(v1);
-        const Vector3d c = vertPos.row(v2);
-        const double area = 0.5 * (b - a).cross(c - a).norm();
-        for (int k = 0; k < 3; ++k) {
-            const int v = faces[fi * 3 + k];
-            vA(v) += area;
-            Vd1.row(v) += area * faceD1.row(fi);
-            Vd2.row(v) += area * faceD2.row(fi);
-        }
-    }
-    for (int i = 0; i < nV; ++i) {
-        if (vA(i) > 1e-12) {
-            Vd1.row(i) /= vA(i);
-            Vd2.row(i) /= vA(i);
-        }
-    }
-
+    // Build per-vertex divergence of the face-constant target vector field.
+    // Standard L² projection:  (div K)_i = 0.5 · Σ_T  K_T · (n × e_opp)
+    // where n is the unnormalised face normal and e_opp is the edge opposite vertex i.
     VectorXd div1 = VectorXd::Zero(nV);
     VectorXd div2 = VectorXd::Zero(nV);
+
     for (int fi = 0; fi < nF; ++fi) {
         const int v0 = faces[fi * 3];
         const int v1 = faces[fi * 3 + 1];
@@ -267,26 +267,22 @@ void MIQQuad::solvePoisson()
         const Vector3d p0 = vertPos.row(v0);
         const Vector3d p1 = vertPos.row(v1);
         const Vector3d p2 = vertPos.row(v2);
-        const Vector3d fn = (p1 - p0).cross(p2 - p0);
-        const Vector3d e01 = p1 - p0;
-        const Vector3d e12 = p2 - p1;
-        const Vector3d e20 = p0 - p2;
-        const Vector3d en01 = fn.cross(e01).normalized();
-        const Vector3d en12 = fn.cross(e12).normalized();
-        const Vector3d en20 = fn.cross(e20).normalized();
-        const double cot0 = cotan(p2, p0, p1);
-        const double cot1 = cotan(p0, p1, p2);
-        const double cot2 = cotan(p1, p2, p0);
+
+        const Vector3d n = (p1 - p0).cross(p2 - p0);   // unnormalised, |n| = 2·area
+        const Vector3d e12 = p2 - p1;  // opposite v0
+        const Vector3d e20 = p0 - p2;  // opposite v1
+        const Vector3d e01 = p1 - p0;  // opposite v2
+
         const Vector3d fd1 = faceD1.row(fi);
         const Vector3d fd2 = faceD2.row(fi);
-        const double d1 = 0.5 * (fd1.dot(en01) * cot2 + fd1.dot(en12) * cot0 + fd1.dot(en20) * cot1);
-        const double d2 = 0.5 * (fd2.dot(en01) * cot2 + fd2.dot(en12) * cot0 + fd2.dot(en20) * cot1);
-        div1(v0) += d1;
-        div1(v1) += d1;
-        div1(v2) += d1;
-        div2(v0) += d2;
-        div2(v1) += d2;
-        div2(v2) += d2;
+
+        div1(v0) += 0.5 * fd1.dot(n.cross(e12));
+        div1(v1) += 0.5 * fd1.dot(n.cross(e20));
+        div1(v2) += 0.5 * fd1.dot(n.cross(e01));
+
+        div2(v0) += 0.5 * fd2.dot(n.cross(e12));
+        div2(v1) += 0.5 * fd2.dot(n.cross(e20));
+        div2(v2) += 0.5 * fd2.dot(n.cross(e01));
     }
 
     SparseMatrix<double> L;
