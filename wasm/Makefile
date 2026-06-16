@@ -104,10 +104,10 @@ BD_LSCM_INC   := -I$(EIGEN_PATH) -I../BaseMesh -I../Parameterization -I../Parame
 # ========== Build targets ==========
 .PHONY: build-base-mesh build-cutseam-mesh build-solver \
         build-lscm build-abf build-arap build-bd-lscm \
-        build-dgp-compat build-simple-compat build-bdhm \
+        build-dgp-compat build-simple-compat build-bdhm build-ruppert \
         build-all clean check help
 
-build-all: build-base-mesh build-cutseam-mesh build-solver build-lscm build-abf build-arap build-bd-lscm build-dgp-compat build-simple-compat build-bdhm
+build-all: build-base-mesh build-cutseam-mesh build-solver build-lscm build-abf build-arap build-bd-lscm build-dgp-compat build-simple-compat build-bdhm build-ruppert
 
 # --- BaseMesh ---
 build-base-mesh: $(OUTPUT_DIR)/base_mesh.js
@@ -192,6 +192,15 @@ $(OUTPUT_DIR)/uv_unwrap_simple.js: bindings_uv_unwrap_simple_compat.cpp $(SIMPLE
 	       -o $@ $(EM_FLAGS_COMPAT) -s EXPORT_NAME="UvUnwrapSimpleSolver"
 	@echo "[Simple-Compat] Done → $@"
 
+# --- Ruppert (Delaunay refinement, 自包含, 无依赖) ---
+build-ruppert: $(OUTPUT_DIR)/ruppert.js
+$(OUTPUT_DIR)/ruppert.js: bindings_ruppert_compat.cpp
+	@mkdir -p $(OUTPUT_DIR)
+	@echo "[Ruppert] Compiling..."
+	$(CXX) $(CXXFLAGS) bindings_ruppert_compat.cpp \
+	       -o $@ $(EM_FLAGS_COMPAT) -s EXPORT_NAME="RuppertModule"
+	@echo "[Ruppert] Done → $@"
+
 # --- BD-HM (Bounded Distortion Harmonic Map) ---
 build-bdhm: $(OUTPUT_DIR)/bdhm.js
 $(OUTPUT_DIR)/bdhm.js: bindings_bdhm.cpp $(BDHM_SRCS)
@@ -214,6 +223,7 @@ clean:
 	-rm -f $(OUTPUT_DIR)/dgp_basic.js $(OUTPUT_DIR)/dgp_basic.wasm
 	-rm -f $(OUTPUT_DIR)/uv_unwrap_simple.js $(OUTPUT_DIR)/uv_unwrap_simple.wasm
 	-rm -f $(OUTPUT_DIR)/bdhm.js $(OUTPUT_DIR)/bdhm.wasm
+	-rm -f $(OUTPUT_DIR)/ruppert.js $(OUTPUT_DIR)/ruppert.wasm
 	@echo "Done."
 
 check:
