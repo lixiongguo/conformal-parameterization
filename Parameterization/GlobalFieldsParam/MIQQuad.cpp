@@ -18,7 +18,7 @@ MIQQuad::MIQQuad(Mesh& mesh0)
 {
 }
 
-void MIQQuad::buildLocalFrame(const Vector3d& n, Vector3d& t1, Vector3d& t2)
+void MIQQuad::buildLocalFrame(const Vector3d& n, Vector3d& t1, Vector3d& t2) const
 {
     Vector3d ref(1, 0, 0);
     if (std::fabs(n.dot(ref)) > 0.9) ref = Vector3d(0, 1, 0);
@@ -26,7 +26,7 @@ void MIQQuad::buildLocalFrame(const Vector3d& n, Vector3d& t1, Vector3d& t2)
     t2 = n.cross(t1).normalized();
 }
 
-double MIQQuad::cotan(const Vector3d& a, const Vector3d& b, const Vector3d& c)
+double MIQQuad::cotan(const Vector3d& a, const Vector3d& b, const Vector3d& c) const
 {
     const Vector3d u = a - b;
     const Vector3d v = c - b;
@@ -328,7 +328,7 @@ void MIQQuad::solvePoisson()
 
 // ============================== Phase 2 =====================================
 
-int MIQQuad::countSingularities() const
+int MIQQuad::countSingularities()
 {
     singularVerts_.clear();
     for (int v = 0; v < nV; ++v) {

@@ -10,14 +10,18 @@
 #include "ARAP.h"
 #include "Tutte.h"
 #include "Solver.h"
+#include "CirclePatterns.h"
+#include "Cetm.h"
+#include "RicciFlow.h"
 #include <chrono>
 #include <vector>
+#include <cmath>
+#include <limits>
 #include <emscripten.h>
 
 static Mesh*               g_mesh = nullptr;
 static std::vector<double> g_uv;
 static double              g_last_time = 0.0;
-static bool                g_cp_fallback = false;
 static std::vector<double> g_qc_errors;
 static std::vector<double> g_qc_colors;
 
@@ -50,6 +54,17 @@ static void recordTime(const std::chrono::steady_clock::time_point& t0) {
     g_last_time = std::chrono::duration<double, std::milli>(t1 - t0).count();
 }
 
+static bool hasValidUvSpread() {
+    if (!g_mesh || g_mesh->vertices.empty()) return false;
+    double minU = std::numeric_limits<double>::infinity(), maxU = -minU;
+    double minV = std::numeric_limits<double>::infinity(), maxV = -minV;
+    for (const auto& v : g_mesh->vertices) {
+        minU = std::min(minU, v.uv.x()); maxU = std::max(maxU, v.uv.x());
+        minV = std::min(minV, v.uv.y()); maxV = std::max(maxV, v.uv.y());
+    }
+    return (maxU - minU) >= 1e-12 || (maxV - minV) >= 1e-12;
+}
+
 // ========== 导出 ==========
 extern "C" {
 
@@ -57,7 +72,7 @@ EMSCRIPTEN_KEEPALIVE
 void dispose() {
     if (g_mesh) { delete g_mesh; g_mesh = nullptr; }
     g_uv.clear(); g_qc_errors.clear(); g_qc_colors.clear();
-    g_cp_fallback = false; g_last_time = 0.0;
+    g_last_time = 0.0;
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -115,10 +130,12 @@ EMSCRIPTEN_KEEPALIVE
 int solve_linabf(double* pos, int posLen, int* face, int faceLen) {
     dispose(); g_mesh = new Mesh();
     buildMeshFrom(pos, posLen, face, faceLen);
+    if (g_mesh->boundaries.empty()) return -3;
     LinAbf abf(*g_mesh);
     auto t0 = std::chrono::steady_clock::now();
     abf.parameterize();
     recordTime(t0);
+    if (!hasValidUvSpread()) return -2;
     extractUV();
     return 0;
 }
@@ -127,10 +144,12 @@ EMSCRIPTEN_KEEPALIVE
 int solve_abfpp(double* pos, int posLen, int* face, int faceLen) {
     dispose(); g_mesh = new Mesh();
     buildMeshFrom(pos, posLen, face, faceLen);
+    if (g_mesh->boundaries.empty()) return -3;
     AbfPlusPlus abf(*g_mesh);
     auto t0 = std::chrono::steady_clock::now();
     abf.parameterize();
     recordTime(t0);
+    if (!hasValidUvSpread()) return -2;
     extractUV();
     return 0;
 }
@@ -147,19 +166,63 @@ int solve_arap(double* pos, int posLen, int* face, int faceLen, int maxIter) {
     return 0;
 }
 
-// ---- Circle Pattern / CETM / Ricci (stub → LSCM fallback) ----
+// ---- Circle Pattern / CETM / Ricci ----
 EMSCRIPTEN_KEEPALIVE
-int solve_cp(double* pos, int posLen, int* face, int faceLen, int /*opt*/) {
-    g_cp_fallback = true;
-    return solve_lscm(pos, posLen, face, faceLen, 0, 0);
+int solve_cp(double* pos, int posLen, int* face, int faceLen, int optScheme,
+             int* coneIdx, int coneIdxLen, double* coneAngles, int coneAnglesLen) {
+    dispose(); g_mesh = new Mesh();
+    buildMeshFrom(pos, posLen, face, faceLen);
+    auto t0 = std::chrono::steady_clock::now();
+    g_mesh->delaunayize();
+    CirclePatterns p(*g_mesh, optScheme);
+    if (coneIdx && coneAngles && coneIdxLen > 0) {
+        std::vector<int> idx(coneIdx, coneIdx + coneIdxLen);
+        std::vector<double> angles(coneAngles, coneAngles + std::min(coneIdxLen, coneAnglesLen));
+        p.setConeSingulars(idx, angles);
+    }
+    p.parameterize();
+    recordTime(t0);
+    if (!hasValidUvSpread()) return -2;
+    extractUV();
+    return 0;
 }
+
 EMSCRIPTEN_KEEPALIVE
-int solve_cetm(double* pos, int posLen, int* face, int faceLen, int opt) {
-    return solve_cp(pos, posLen, face, faceLen, opt);
+int solve_cetm(double* pos, int posLen, int* face, int faceLen, int optScheme,
+               int* coneIdx, int coneIdxLen, double* coneAngles, int coneAnglesLen) {
+    dispose(); g_mesh = new Mesh();
+    buildMeshFrom(pos, posLen, face, faceLen);
+    auto t0 = std::chrono::steady_clock::now();
+    g_mesh->delaunayize();
+    Cetm p(*g_mesh, optScheme);
+    if (coneIdx && coneAngles && coneIdxLen > 0) {
+        std::vector<int> idx(coneIdx, coneIdx + coneIdxLen);
+        std::vector<double> angles(coneAngles, coneAngles + std::min(coneIdxLen, coneAnglesLen));
+        p.setConeSingulars(idx, angles);
+    }
+    p.parameterize();
+    recordTime(t0);
+    extractUV();
+    return 0;
 }
+
 EMSCRIPTEN_KEEPALIVE
-int solve_ricci(double* pos, int posLen, int* face, int faceLen, int opt) {
-    return solve_cp(pos, posLen, face, faceLen, opt);
+int solve_ricci(double* pos, int posLen, int* face, int faceLen, int optScheme,
+                int* coneIdx, int coneIdxLen, double* coneAngles, int coneAnglesLen) {
+    dispose(); g_mesh = new Mesh();
+    buildMeshFrom(pos, posLen, face, faceLen);
+    auto t0 = std::chrono::steady_clock::now();
+    g_mesh->delaunayize();
+    RicciFlow p(*g_mesh, optScheme);
+    if (coneIdx && coneAngles && coneIdxLen > 0) {
+        std::vector<int> idx(coneIdx, coneIdx + coneIdxLen);
+        std::vector<double> angles(coneAngles, coneAngles + std::min(coneIdxLen, coneAnglesLen));
+        p.setConeSingulars(idx, angles);
+    }
+    p.parameterize();
+    recordTime(t0);
+    extractUV();
+    return 0;
 }
 
 // ---- UV 结果 ----
@@ -168,11 +231,9 @@ int get_uv_result_size() { return (int)g_uv.size(); }
 EMSCRIPTEN_KEEPALIVE
 double* get_uv_result() { return g_uv.data(); }
 
-// ---- 耗时 / fallback ----
+// ---- 耗时 ----
 EMSCRIPTEN_KEEPALIVE
 double get_last_time_ms() { return g_last_time; }
-EMSCRIPTEN_KEEPALIVE
-int get_cp_fallback_to_cetm() { return g_cp_fallback ? 1 : 0; }
 
 // ---- load_mesh_with_uv (QC 误差用) ----
 EMSCRIPTEN_KEEPALIVE

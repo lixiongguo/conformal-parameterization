@@ -418,7 +418,7 @@ bool QuadCover::buildBranchCover(CoverData& cover) {
 
     for (int fi = 0; fi < nFaces; ++fi) {
         Vector3d n = faceNormals.row(fi).normalized();
-        Vector3d base = faceDirs.row(fi);
+        Vector3d base = faceDirs_.row(fi);
         base -= base.dot(n) * n;
         if (base.norm() < 1e-12) {
             Vector3d t1, t2;

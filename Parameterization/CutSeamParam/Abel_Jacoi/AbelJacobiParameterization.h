@@ -3,12 +3,10 @@
 
 #include "CutSeamParameterization.h"
 #include "AbelJacobi.h"
-#include "Lscm.h"
 #include <vector>
 
 /**
  * Global conformal parameterization via Abel–Jacobi / period lattice (closed, g >= 1).
- * Falls back to LSCM on disk topology or genus 0.
  */
 class AbelJacobiParameterization : public CutSeamParameterization {
 public:

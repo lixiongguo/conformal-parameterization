@@ -1,5 +1,4 @@
 #include "AbfPlusPlus.h"
-#include "Lscm.h"
 #include <Eigen/SparseCholesky>
 #include <algorithm>
 #include <cmath>
@@ -97,10 +96,8 @@ AbfPlusPlus::AbfPlusPlus(Mesh& mesh0, int maxIterations)
 
 void AbfPlusPlus::parameterize()
 {
-    // closed meshes → fallback to LSCM
     if (mesh.boundaries.empty()) {
-        Lscm fallback(mesh);
-        fallback.parameterize();
+        std::cerr << "[AbfPlusPlus] closed mesh is not supported.\n";
         return;
     }
 

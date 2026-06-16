@@ -68,10 +68,10 @@ protected:
     bool solveSeamlessParam();
     void buildCotLaplacianCut(Eigen::SparseMatrix<double>& L) const;
     int  findSharedEdge(int f1, int f2) const;
-    int  countSingularities() const;
+    int  countSingularities();
 
-    void buildLocalFrame(const Eigen::Vector3d& n, Eigen::Vector3d& t1, Eigen::Vector3d& t2);
-    double cotan(const Eigen::Vector3d& a, const Eigen::Vector3d& b, const Eigen::Vector3d& c);
+    void buildLocalFrame(const Eigen::Vector3d& n, Eigen::Vector3d& t1, Eigen::Vector3d& t2) const;
+    double cotan(const Eigen::Vector3d& a, const Eigen::Vector3d& b, const Eigen::Vector3d& c) const;
 
     // ---- data ----
 

@@ -1,5 +1,4 @@
 #include "LinAbf.h"
-#include "Lscm.h"
 #include <Eigen/SparseCholesky>
 #include <algorithm>
 #include <cmath>
@@ -313,9 +312,7 @@ LinAbf::LinAbf(Mesh& mesh0, int maxIterations)
 void LinAbf::parameterize()
 {
     if (mesh.boundaries.empty()) {
-        // Closed meshes are not handled by this simplified ABF pipeline.
-        Lscm fallback(mesh);
-        fallback.parameterize();
+        std::cerr << "[LinAbf] closed mesh is not supported.\n";
         return;
     }
 

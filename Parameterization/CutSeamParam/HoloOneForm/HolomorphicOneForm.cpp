@@ -1,5 +1,4 @@
 #include "HolomorphicOneForm.h"
-#include "Lscm.h"
 #include "TreeCotreeBasis.h"
 #include <iostream>
 #include <algorithm>
@@ -468,26 +467,17 @@ void HolomorphicOneForm::parameterize()
 
     extractMesh();
     if (nV < 3 || nF < 1 || nE < 1) {
-        Lscm fallback(cutMesh_);
-        fallback.parameterize();
-        copyCutMeshUvsToOriginal();
         return;
     }
 
     VectorXd omega;
     if (!solveHarmonic1Form(omega)) {
-        Lscm fallback(cutMesh_);
-        fallback.parameterize();
-        copyCutMeshUvsToOriginal();
         return;
     }
 
     VectorXd starOmega;
     computeHodgeConjugate(omega, starOmega);
     if (!isFiniteVector(starOmega)) {
-        Lscm fallback(cutMesh_);
-        fallback.parameterize();
-        copyCutMeshUvsToOriginal();
         return;
     }
 
@@ -498,9 +488,6 @@ void HolomorphicOneForm::parameterize()
         spread = std::max(spread, std::max(std::abs(v->uv.x()), std::abs(v->uv.y())));
     }
     if (spread < 1e-12) {
-        Lscm fallback(cutMesh_);
-        fallback.parameterize();
-        copyCutMeshUvsToOriginal();
         return;
     }
 

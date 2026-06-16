@@ -21,13 +21,7 @@ AbelJacobi::DivisorCheck AbelJacobiParameterization::checkSingularities() const
 void AbelJacobiParameterization::parameterize()
 {
     if (!aj_.build()) {
-        std::cerr << "[AbelJacobiParameterization] build failed, falling back to LSCM.\n";
-        if (!prepareCutMesh()) {
-            return;
-        }
-        Lscm fallback(cutMesh_);
-        fallback.parameterize();
-        copyCutMeshUvsToOriginal();
+        std::cerr << "[AbelJacobiParameterization] build failed.\n";
         return;
     }
 
@@ -43,13 +37,7 @@ void AbelJacobiParameterization::parameterize()
     }
 
     if (!aj_.quantizeAndParameterize(baseVertex_)) {
-        std::cerr << "[AbelJacobiParameterization] quantization failed, falling back to LSCM.\n";
-        if (!prepareCutMesh()) {
-            return;
-        }
-        Lscm fallback(cutMesh_);
-        fallback.parameterize();
-        copyCutMeshUvsToOriginal();
+        std::cerr << "[AbelJacobiParameterization] quantization failed.\n";
         return;
     }
 
