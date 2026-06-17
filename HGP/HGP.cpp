@@ -8,6 +8,22 @@
 #include "CGAL\CGAL_Macros.h"
 
 #include <CGAL\Timer.h>
+#include <algorithm>
+
+namespace {
+
+double safeNorm(double x, double y, double z)
+{
+	return std::sqrt(x*x + y*y + z*z);
+}
+
+Complex normalizedFrame(Complex z)
+{
+	double a = std::abs(z);
+	return a > 1e-14 ? a / z : Complex(1.0, 0.0);
+}
+
+}
 
 bool HGP::run(std::string& objPath, std::string& vfPath)
 {
@@ -23,14 +39,12 @@ bool HGP::run(std::string& objPath, std::string& vfPath)
 	setRotationsConstraints();
 	setBoundaryFaces();
 
-	MatlabInterface::GetEngine().Eval("HGP_settings");
-	GMMDenseColMatrix gmmItNum(1, 1), gmmFrameFix(1, 1);
-	MatlabGMMDataExchange::GetEngineDenseMatrix("maxIt", gmmItNum);
-	MatlabGMMDataExchange::GetEngineDenseMatrix("useFrameFixing", gmmFrameFix);
-	MatlabInterface::GetEngine().Eval("clear maxIt useFrameFixing");
-
-	int maxIt = gmmItNum(0, 0);
-	useFrameFixing = gmmFrameFix(0, 0) == 1;
+	// The old settings GUI only collected these runtime options.
+	int maxIt = 5;
+	useFrameFixing = true;
+	GMMDenseColMatrix visMatlab(1, 1);
+	visMatlab(0, 0) = 0;
+	MatlabGMMDataExchange::SetEngineDenseMatrix("visMatlab", visMatlab);
 
 	bool firstIteration = true;
 	mUVs.resize(mSizeOfSystemVar, 2);
@@ -83,8 +97,6 @@ bool HGP::run(std::string& objPath, std::string& vfPath)
 
 	visualize();
 	
-	MatlabInterface::GetEngine().EvalToCout("HGP_report");
-
 	return true;
 }
 
@@ -580,14 +592,167 @@ void HGP::setHarmonicSeamVerticesConstraints()
 
 void HGP::setFramesInMatlab(bool firstTime)
 {
-	if (firstTime)
-		MatlabInterface::GetEngine().EvalToCout("setFrames1");
-	else
-	{
-		GMMDenseColMatrix frameFixingStatus(1, 1);
-		frameFixingStatus(0, 0) = frameStatus;
-		MatlabGMMDataExchange::SetEngineDenseMatrix("HGP.FrameFix.status", frameFixingStatus);
-		MatlabInterface::GetEngine().EvalToCout("setFrames2");
+	if (firstTime){
+		MatlabInterface::GetEngine().EvalToCout("HGP.Result.timeVector=[];");
+		GMMDenseColMatrix hN(1, 1);
+		double maxHalfEdge = 0;
+		for (int i = 0; i < (int)halfEdges.nrows(); ++i)
+			for (int j = 0; j < (int)halfEdges.ncols(); ++j)
+				maxHalfEdge = std::max(maxHalfEdge, halfEdges(i, j));
+		hN(0, 0) = maxHalfEdge;
+		MatlabGMMDataExchange::SetEngineDenseMatrix("HGP.hN", hN);
+		computeGradientsInCpp();
+		if (calcFramesFromVecField)
+			computeFramesFromVectorFieldInCpp();
+		return;
 	}
+
+	GMMDenseColMatrix frameFixingStatus(1, 1);
+	frameFixingStatus(0, 0) = frameStatus;
+	MatlabGMMDataExchange::SetEngineDenseMatrix("HGP.FrameFix.status", frameFixingStatus);
+	updateFramesFromCurrentFzInCpp();
+}
+
+void HGP::computeGradientsInCpp()
+{
+	int NF = (int)F.nrows();
+	GMMDenseColMatrix m1(NF, 3), m2(NF, 3), S(NF, 1);
+	GMMDenseComplexColMatrix ti(NF, 1), tj(NF, 1), tk(NF, 1);
+
+	for (int f = 0; f < NF; ++f){
+		int i0 = (int)F(f, 0);
+		int i1 = (int)F(f, 1);
+		int i2 = (int)F(f, 2);
+		const Vec3& p0 = mMeshBuffer.positions[i0];
+		const Vec3& p1 = mMeshBuffer.positions[i1];
+		const Vec3& p2 = mMeshBuffer.positions[i2];
+
+		double v1x = p1[0] - p0[0], v1y = p1[1] - p0[1], v1z = p1[2] - p0[2];
+		double v2x = p2[0] - p0[0], v2y = p2[1] - p0[1], v2z = p2[2] - p0[2];
+		double Xj = safeNorm(v1x, v1y, v1z);
+		double n13 = safeNorm(v2x, v2y, v2z);
+		double n23 = safeNorm(p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2]);
+
+		double Xi = 0.0, Yi = 0.0, Yj = 0.0;
+		double Xk = (Xj*Xj + n13*n13 - n23*n23) / (2.0 * std::max(Xj, 1e-14));
+		double Yk = std::sqrt(std::max(0.0, n13*n13 - Xk*Xk));
+
+		double sx = v1y*v2z - v2y*v1z;
+		double sy = -1.0 * (v1x*v2z - v2x*v1z);
+		double sz = v1x*v2y - v2x*v1y;
+		double area = 0.5 * safeNorm(sx, sy, sz);
+		S(f, 0) = area;
+		double inv2A = 1.0 / std::max(2.0 * area, 1e-14);
+
+		m1(f, 0) = inv2A * (Yj - Yk);
+		m1(f, 1) = inv2A * (Yk - Yi);
+		m1(f, 2) = inv2A * (Yi - Yj);
+		m2(f, 0) = inv2A * (Xk - Xj);
+		m2(f, 1) = inv2A * (Xi - Xk);
+		m2(f, 2) = inv2A * (Xj - Xi);
+
+		Complex e_k = Complex(Xj, Yj) - Complex(Xi, Yi);
+		Complex e_i = Complex(Xk, Yk) - Complex(Xj, Yj);
+		Complex e_j = Complex(Xi, Yi) - Complex(Xk, Yk);
+		Complex I(0.0, 1.0);
+		ti(f, 0) = e_i * I;
+		tj(f, 0) = e_j * I;
+		tk(f, 0) = e_k * I;
+	}
+
+	MatlabGMMDataExchange::SetEngineDenseMatrix("HGP.Grad.m1", m1);
+	MatlabGMMDataExchange::SetEngineDenseMatrix("HGP.Grad.m2", m2);
+	MatlabGMMDataExchange::SetEngineDenseMatrix("HGP.Grad.S", S);
+	MatlabGMMDataExchange::SetEngineDenseMatrix("HGP.Grad.ti", ti);
+	MatlabGMMDataExchange::SetEngineDenseMatrix("HGP.Grad.tj", tj);
+	MatlabGMMDataExchange::SetEngineDenseMatrix("HGP.Grad.tk", tk);
+}
+
+void HGP::computeFramesFromVectorFieldInCpp()
+{
+	int NF = (int)F.nrows();
+	GMMDenseComplexColMatrix frames(NF, 1);
+
+	for (int f = 0; f < NF; ++f){
+		int i0 = (int)F(f, 0);
+		int i1 = (int)F(f, 1);
+		int i2 = (int)F(f, 2);
+		const Vec3& p0 = mMeshBuffer.positions[i0];
+		const Vec3& p1 = mMeshBuffer.positions[i1];
+		const Vec3& p2 = mMeshBuffer.positions[i2];
+
+		double e1x = p1[0] - p0[0], e1y = p1[1] - p0[1], e1z = p1[2] - p0[2];
+		double e2x = p2[0] - p0[0], e2y = p2[1] - p0[1], e2z = p2[2] - p0[2];
+		double e1n = std::max(safeNorm(e1x, e1y, e1z), 1e-14);
+		double e2n = std::max(safeNorm(e2x, e2y, e2z), 1e-14);
+		e1x /= e1n; e1y /= e1n; e1z /= e1n;
+		e2x /= e2n; e2y /= e2n; e2z /= e2n;
+
+		double nx = e1y*e2z - e1z*e2y;
+		double ny = e1z*e2x - e1x*e2z;
+		double nz = e1x*e2y - e1y*e2x;
+		double nn = std::max(safeNorm(nx, ny, nz), 1e-14);
+		nx /= nn; ny /= nn; nz /= nn;
+
+		Facet_handle face = mCgalMesh.face(f);
+		double vx = face->kv1().x(), vy = face->kv1().y(), vz = face->kv1().z();
+		double vn = std::max(safeNorm(vx, vy, vz), 1e-14);
+		vx /= vn; vy /= vn; vz /= vn;
+
+		double c1x = e1y*vz - e1z*vy;
+		double c1y = e1z*vx - e1x*vz;
+		double c1z = e1x*vy - e1y*vx;
+		double c1n = safeNorm(c1x, c1y, c1z);
+		if (c1n > 1e-14){ c1x /= c1n; c1y /= c1n; c1z /= c1n; }
+		double signSin = c1x*nx + c1y*ny + c1z*nz;
+		double cosAng = std::max(-1.0, std::min(1.0, vx*e1x + vy*e1y + vz*e1z));
+		double sinAng = std::sqrt(std::abs(1.0 - cosAng*cosAng));
+		frames(f, 0) = Complex(cosAng, signSin * sinAng);
+	}
+
+	MatlabGMMDataExchange::SetEngineDenseMatrix("HGP.frames", frames);
+}
+
+void HGP::updateFramesFromCurrentFzInCpp()
+{
+	GMMDenseComplexColMatrix fz;
+	MatlabGMMDataExchange::GetEngineDenseMatrix("HGP.fz", fz);
+	int NF = (int)fz.nrows();
+	GMMDenseComplexColMatrix frames(NF, 1);
+	for (int i = 0; i < NF; ++i)
+		frames(i, 0) = normalizedFrame(fz(i, 0));
+
+	if (!frameStatus){
+		GMMDenseColMatrix badOneRing, S;
+		GMMDenseComplexColMatrix embeddedOneRing, rotationOffset, ti, tj, tk;
+		MatlabGMMDataExchange::GetEngineDenseMatrix("HGP.FrameFix.badOneRing", badOneRing);
+		MatlabGMMDataExchange::GetEngineDenseMatrix("HGP.FrameFix.embeddedOneRing", embeddedOneRing);
+		MatlabGMMDataExchange::GetEngineDenseMatrix("HGP.FrameFix.rotationOffset", rotationOffset);
+		MatlabGMMDataExchange::GetEngineDenseMatrix("HGP.Grad.S", S);
+		MatlabGMMDataExchange::GetEngineDenseMatrix("HGP.Grad.ti", ti);
+		MatlabGMMDataExchange::GetEngineDenseMatrix("HGP.Grad.tj", tj);
+		MatlabGMMDataExchange::GetEngineDenseMatrix("HGP.Grad.tk", tk);
+
+		int n = (int)badOneRing.nrows();
+		std::vector<Complex> fzz(n);
+		for (int r = 0; r < n; ++r){
+			int face = (int)badOneRing(r, 0) - 1;
+			Complex numerator = std::conj(ti(face, 0)) * embeddedOneRing(r, 0)
+				+ std::conj(tj(face, 0)) * embeddedOneRing(r, 1)
+				+ std::conj(tk(face, 0)) * embeddedOneRing(r, 2);
+			fzz[r] = numerator / (4.0 * std::max(S(face, 0), 1e-14));
+		}
+		if (!fzz.empty()){
+			int firstFace = (int)badOneRing(0, 0) - 1;
+			Complex rr = std::abs(fz(firstFace, 0)) / frames(firstFace, 0) / fzz[0];
+			for (int r = 0; r < n; ++r){
+				int face = (int)badOneRing(r, 0) - 1;
+				Complex local = fzz[r] * rr * rotationOffset(r, 0);
+				frames(face, 0) = normalizedFrame(local);
+			}
+		}
+	}
+
+	MatlabGMMDataExchange::SetEngineDenseMatrix("HGP.frames", frames);
 }
 

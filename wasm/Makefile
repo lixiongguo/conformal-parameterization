@@ -85,6 +85,7 @@ SIMPLE_COMPAT_SRCS  := $(BASEMESH_SRCS) $(SOLVER_SRCS) \
                        ../Parameterization/SimpleParam/ABF/LinAbf.cpp \
                        ../Parameterization/SimpleParam/ARAP/ARAP.cpp \
                        ../Parameterization/SimpleParam/ARAP/Tutte.cpp \
+                       ../FastHGP/FastHGPSimple.cpp \
                        $(CONE_SRCS)
 
 FIELD_COMPAT_SRCS   := $(MESH_CUTSEAM_SRCS) $(SOLVER_SRCS) \
@@ -107,6 +108,7 @@ SIMPLE_COMPAT_INC := -I$(EIGEN_PATH) -I../BaseMesh -I../Parameterization \
                      -I../Parameterization/SimpleParam/LSCM \
                      -I../Parameterization/SimpleParam/ABF \
                      -I../Parameterization/SimpleParam/ARAP \
+                     -I../FastHGP \
                      -I../Parameterization/ConeParam \
                      -I../Parameterization/ConeParam/Conformal \
                      -I../Parameterization/ConeParam/RicciFlow \

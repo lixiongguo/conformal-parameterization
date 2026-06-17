@@ -5,6 +5,7 @@
 
 #include "Utils/MatlabInterface.h"
 #include "Utils/MatlabGMMDataExchange.h"
+#include <algorithm>
 
 
 void FrameFixingClass::searchForBadCone()
@@ -80,19 +81,30 @@ void FrameFixingClass::extractOneRingAngles()
 	for (int i = 0; i < (int)oneRingFaces.size(); ++i)
 		rotationOffset(i, 0) = rotOffset[i];
 	 
+	newAngles.resize(oneRingAngles.size());
+	const double eps = 1e-4;
+	double target = std::max(oneRingConeAngle(0, 0), eps * (double)oneRingAngles.size());
+
+	// C++ replacement for frameFixABF.m. The Matlab script solves a tiny CVX
+	// projection that mainly changes the first angle of each one-ring face while
+	// keeping the cone angle sum fixed. Project the original first-angle vector
+	// to the positive simplex sum(newAngles)=target.
+	double lo = -M_PI, hi = M_PI;
+	for (int iter = 0; iter < 80; ++iter){
+		double mid = 0.5 * (lo + hi);
+		double sum = 0.0;
+		for (double a : oneRingAngles)
+			sum += std::max(eps, a - mid);
+		if (sum > target) lo = mid;
+		else hi = mid;
+	}
+	double lambda = 0.5 * (lo + hi);
+	for (int i = 0; i < (int)oneRingAngles.size(); ++i)
+		newAngles[i] = std::max(eps, oneRingAngles[i] - lambda);
+
 	MatlabGMMDataExchange::SetEngineDenseMatrix("HGP.FrameFix.rotationOffset", rotationOffset);
 	MatlabGMMDataExchange::SetEngineDenseMatrix("HGP.FrameFix.oneRingConeAngle", oneRingConeAngle);
 	MatlabGMMDataExchange::SetEngineDenseMatrix("HGP.FrameFix.originalOneRingAngle", originalOneRingAngle);
-
-
-
-	MatlabInterface::GetEngine().EvalToCout("HGP.FrameFix.newOneRingAngles = frameFixABF(HGP);");
-
-	GMMDenseColMatrix newOneRingAngles(oneRingAngles.size(), 1);
-	newAngles.resize(oneRingAngles.size());
-	MatlabGMMDataExchange::GetEngineDenseMatrix("HGP.FrameFix.newOneRingAngles", newOneRingAngles);
-	for (int i = 0; i < (int)oneRingAngles.size(); ++i)
-		newAngles[i] = newOneRingAngles(i, 0);
 
 }
 

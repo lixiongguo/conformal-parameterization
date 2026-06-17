@@ -9,6 +9,7 @@
 #include "LinAbf.h"
 #include "ARAP.h"
 #include "Tutte.h"
+#include "FastHGPSimple.h"
 #include "Solver.h"
 #include "CirclePatterns.h"
 #include "Cetm.h"
@@ -162,6 +163,22 @@ int solve_arap(double* pos, int posLen, int* face, int faceLen, int maxIter) {
     auto t0 = std::chrono::steady_clock::now();
     arap.parameterize();
     recordTime(t0);
+    extractUV();
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int solve_fasthgp(double* pos, int posLen, int* face, int faceLen, int maxIter) {
+    dispose(); g_mesh = new Mesh();
+    buildMeshFrom(pos, posLen, face, faceLen);
+    if (g_mesh->boundaries.empty()) return -3;
+    // FastHGPSimple: WASM subset (LSCM + symmetric Dirichlet). Full FastHGP (CGAL/KKT/ATP)
+    // lives in FastHGP/FastHGP.{h,cpp} and requires a desktop CGAL build.
+    FastHGPSimple fastHgp(*g_mesh, maxIter > 0 ? maxIter : 80);
+    auto t0 = std::chrono::steady_clock::now();
+    fastHgp.parameterize();
+    recordTime(t0);
+    if (!hasValidUvSpread()) return -2;
     extractUV();
     return 0;
 }

@@ -4,6 +4,8 @@ project(OptimalTransports LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(OT_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
+
 # ---------------------------------------------------------------------------
 # Dependencies: Eigen3 (headers) and geogram (replaces the former CGAL backend)
 # ---------------------------------------------------------------------------
@@ -13,6 +15,14 @@ if(NOT TARGET Eigen3::Eigen)
     add_library(Eigen3::Eigen INTERFACE IMPORTED)
     set_target_properties(Eigen3::Eigen PROPERTIES
       INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}")
+  elseif(EXISTS "${OT_ROOT}/../../deps/eigen-3.4.0/Eigen")
+    add_library(Eigen3::Eigen INTERFACE IMPORTED)
+    set_target_properties(Eigen3::Eigen PROPERTIES
+      INTERFACE_INCLUDE_DIRECTORIES "${OT_ROOT}/../../deps/eigen-3.4.0")
+  elseif(EXISTS "${OT_ROOT}/../../deps/eigen-3.3.9/Eigen")
+    add_library(Eigen3::Eigen INTERFACE IMPORTED)
+    set_target_properties(Eigen3::Eigen PROPERTIES
+      INTERFACE_INCLUDE_DIRECTORIES "${OT_ROOT}/../../deps/eigen-3.3.9")
   else()
     message(FATAL_ERROR
       "Eigen3 not found. Install it or pass -DEIGEN3_INCLUDE_DIR=/path/to/eigen")
@@ -26,11 +36,7 @@ if(TARGET Geogram::geogram)
   set(GEOGRAM_TARGET Geogram::geogram)
 elseif(TARGET geogram)
   set(GEOGRAM_TARGET geogram)
-else()
-  if(NOT DEFINED GEOGRAM_ROOT)
-    message(FATAL_ERROR
-      "geogram not found. Pass -DGeogram_DIR=... or -DGEOGRAM_ROOT=/path/to/geogram")
-  endif()
+elseif(DEFINED GEOGRAM_ROOT)
   add_library(geogram_ext INTERFACE)
   target_include_directories(geogram_ext INTERFACE
     "${GEOGRAM_ROOT}/include"
@@ -41,18 +47,20 @@ else()
   set(GEOGRAM_TARGET geogram_ext)
 endif()
 
-set(OT_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
-
 # ---------------------------------------------------------------------------
 # geometry/ : geogram-backed primitives shared by the solvers (no CGAL)
 # ---------------------------------------------------------------------------
-add_library(ot_geometry STATIC
-  geometry/power_diagram.cpp
-  SemiOT_solver/ma_power_diagram.cpp   # MA:: compatibility shim
-)
-target_include_directories(ot_geometry PUBLIC
-  ${OT_ROOT} ${OT_ROOT}/geometry ${OT_ROOT}/SemiOT_solver)
-target_link_libraries(ot_geometry PUBLIC Eigen3::Eigen ${GEOGRAM_TARGET})
+if(DEFINED GEOGRAM_TARGET AND EXISTS "${OT_ROOT}/geometry/power_diagram.cpp")
+  add_library(ot_geometry STATIC
+    geometry/power_diagram.cpp
+  )
+  if(EXISTS "${OT_ROOT}/SemiOT_solver/ma_power_diagram.cpp")
+    target_sources(ot_geometry PRIVATE SemiOT_solver/ma_power_diagram.cpp)
+  endif()
+  target_include_directories(ot_geometry PUBLIC
+    ${OT_ROOT} ${OT_ROOT}/geometry ${OT_ROOT}/SemiOT_solver)
+  target_link_libraries(ot_geometry PUBLIC Eigen3::Eigen ${GEOGRAM_TARGET})
+endif()
 
 # ---------------------------------------------------------------------------
 # Common input/output interface (header-only): ot_problem.hpp
@@ -61,25 +69,39 @@ add_library(ot_interface INTERFACE)
 target_include_directories(ot_interface INTERFACE ${OT_ROOT})
 target_link_libraries(ot_interface INTERFACE Eigen3::Eigen)
 
-# Semi-discrete solver (header-only) + its adapter, on top of the geometry lib.
-add_library(ot_semi INTERFACE)
-target_include_directories(ot_semi INTERFACE ${OT_ROOT} ${OT_ROOT}/SemiOT_solver)
-target_link_libraries(ot_semi INTERFACE ot_interface ot_geometry)
+if(TARGET ot_geometry AND EXISTS "${OT_ROOT}/SemiOT_solver/ot_adapter.hpp")
+  # Semi-discrete solver (header-only) + its adapter, on top of the geometry lib.
+  add_library(ot_semi INTERFACE)
+  target_include_directories(ot_semi INTERFACE ${OT_ROOT} ${OT_ROOT}/SemiOT_solver)
+  target_link_libraries(ot_semi INTERFACE ot_interface ot_geometry)
+endif()
+
+# FFT-OT grid-to-grid solver (header-only, Eigen-only).
+add_library(ot_fftot INTERFACE)
+target_include_directories(ot_fftot INTERFACE ${OT_ROOT} ${OT_ROOT}/FFTOT_solver)
+target_link_libraries(ot_fftot INTERFACE ot_interface)
 
 # ---------------------------------------------------------------------------
 # Examples
 # ---------------------------------------------------------------------------
-add_executable(run_power_diagram examples/run_power_diagram.cpp)
-target_link_libraries(run_power_diagram PRIVATE ot_geometry)
+if(TARGET ot_geometry AND EXISTS "${OT_ROOT}/examples/run_power_diagram.cpp")
+  add_executable(run_power_diagram examples/run_power_diagram.cpp)
+  target_link_libraries(run_power_diagram PRIVATE ot_geometry)
+endif()
 
-add_executable(run_semi_ot examples/run_semi_ot.cpp)
-target_link_libraries(run_semi_ot PRIVATE ot_semi)
+if(TARGET ot_semi AND EXISTS "${OT_ROOT}/examples/run_semi_ot.cpp")
+  add_executable(run_semi_ot examples/run_semi_ot.cpp)
+  target_link_libraries(run_semi_ot PRIVATE ot_semi)
+endif()
+
+add_executable(run_fft_ot examples/run_fft_ot.cpp)
+target_link_libraries(run_fft_ot PRIVATE ot_fftot)
 
 # Unified example calling ALL three solvers through the common ot::Solver
 # interface. Needs the extra backend dependencies (stb headers for AHT,
 # surface_mesh + utils for gridOT), so it is opt-in.
 option(OT_BUILD_ALL_SOLVERS "Build the example that drives all three solvers" OFF)
-if(OT_BUILD_ALL_SOLVERS)
+if(OT_BUILD_ALL_SOLVERS AND TARGET ot_semi AND EXISTS "${OT_ROOT}/examples/run_all_solvers.cpp")
   add_executable(run_all_solvers
     examples/run_all_solvers.cpp
     utils/stb_impl.cpp                 # AHT image IO impl (stb)
@@ -89,10 +111,11 @@ if(OT_BUILD_ALL_SOLVERS)
   target_include_directories(run_all_solvers PRIVATE
     ${OT_ROOT}
     ${OT_ROOT}/BenamouOT_solver
+    ${OT_ROOT}/FFTOT_solver
     ${OT_ROOT}/gridOT_solver
     ${OT_ROOT}/SemiOT_solver
     ${OT_ROOT}/utils)              # stb_image.h / stb_image_write.h live here
-  target_link_libraries(run_all_solvers PRIVATE ot_semi)
+  target_link_libraries(run_all_solvers PRIVATE ot_semi ot_fftot)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -100,6 +123,8 @@ endif()
 #  * BenamouOT_solver (aht_ot) is Eigen-only and header-based; its adapter is
 #    BenamouOT_solver/ot_adapter.hpp. Building it additionally needs the stb
 #    image headers used by utils/image_ops.hpp.
+#  * FFTOT_solver (fftot) is Eigen-only and header-based; run_fft_ot is the
+#    smallest grid-to-grid demo.
 #  * gridOT_solver (otmap) depends on surface_mesh + utils; wire it here once
 #    those sources are present in this tree.
 #  * The legacy MongeAmpere/, AHT_OT/, include/ and tests/ trees still contain

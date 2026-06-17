@@ -36,6 +36,9 @@ private:
 	void setHarmonicInternalVerticesConstraints();
 	void setHarmonicSeamVerticesConstraints();
 	void setFramesInMatlab(bool firstTime);
+	void computeGradientsInCpp();
+	void computeFramesFromVectorFieldInCpp();
+	void updateFramesFromCurrentFzInCpp();
 
 	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 };
