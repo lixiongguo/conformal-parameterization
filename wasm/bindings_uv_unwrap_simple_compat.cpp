@@ -3,6 +3,7 @@
 // ============================================================
 #include "Mesh.h"
 #include "MeshIO.h"
+#include "GaussianCurvature.h"
 #include "Lscm.h"
 #include "Scp.h"
 #include "AbfPlusPlus.h"
@@ -21,6 +22,7 @@
 
 static Mesh*               g_mesh = nullptr;
 static std::vector<double> g_uv;
+static std::vector<double> g_gc;
 static double              g_last_time = 0.0;
 static std::vector<double> g_qc_errors;
 static std::vector<double> g_qc_colors;
@@ -71,8 +73,13 @@ extern "C" {
 EMSCRIPTEN_KEEPALIVE
 void dispose() {
     if (g_mesh) { delete g_mesh; g_mesh = nullptr; }
+<<<<<<< HEAD
     g_uv.clear(); g_qc_errors.clear(); g_qc_colors.clear();
     g_last_time = 0.0;
+=======
+    g_uv.clear(); g_gc.clear(); g_qc_errors.clear(); g_qc_colors.clear();
+    g_cp_fallback = false; g_last_time = 0.0;
+>>>>>>> 313a4a3 (mac build wasm修改)
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -288,5 +295,30 @@ EMSCRIPTEN_KEEPALIVE
 int get_qc_colors_size() { return (int)g_qc_colors.size(); }
 EMSCRIPTEN_KEEPALIVE
 double* get_qc_colors() { return g_qc_colors.data(); }
+
+// ---- Gauss 曲率 (原 dgp_basic) ----
+EMSCRIPTEN_KEEPALIVE
+int dgp_load_mesh(double* flatPos, int posLen, int* flatFace, int faceLen) {
+    dispose();
+    g_mesh = new Mesh();
+    buildMeshFrom(flatPos, posLen, flatFace, faceLen);
+    return (g_mesh->vertices.empty()) ? -1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int dgp_compute_gauss_curvature_per_area() {
+    if (!g_mesh) return -1;
+    auto t0 = std::chrono::steady_clock::now();
+    Eigen::VectorXd K = geometry::gaussianCurvaturePerArea(*g_mesh);
+    g_gc.assign(K.data(), K.data() + K.size());
+    recordTime(t0);
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int dgp_get_gc_result_size() { return (int)g_gc.size(); }
+
+EMSCRIPTEN_KEEPALIVE
+double* dgp_get_gc_result() { return g_gc.data(); }
 
 } // extern "C"

@@ -1,18 +1,18 @@
 # ============================================================
-#  Conformal Parameterization — Multi-module WASM Build System
+#  Conformal Parameterization — WASM Build System (精简版)
 # ============================================================
 #
 #  Usage:
-#    make build-base-mesh       Build BaseMesh WASM module
-#    make build-cutseam-mesh    Build CutSeamMesh WASM module
-#    make build-solver          Build Solver WASM module
-#    make build-lscm            Build LSCM (Lscm + Scp) WASM module
-#    make build-abf             Build ABF (Abf++ + LinAbf) WASM module
-#    make build-arap            Build ARAP (ARAP + Tutte) WASM module
-#    make build-all             Build all 6 modules
-#    make clean                 Remove all generated files
-#    make check                 Verify toolchain
-#    make help                  Show this help
+#    make build-simple-compat    Build uv_unwrap_simple (全部方法 + Gauss曲率, ccall)
+#    make build-bd-lscm          Build BD-LSCM (LSCM + Bounded Distortion)
+#    make build-field-compat     Build uv_unwrap_field (QuadCover + HOF, ccall)
+#    make build-abel-compat      Build uv_unwrap_abel_jacobi (Abel-Jacobi, ccall)
+#    make build-bd-deform-compat Build bd_deformation (增量 BD 优化, ccall)
+#    make build-all              Build all 5 modules
+#    make clean                  Remove all generated files
+#    make check                  Verify toolchain
+#    make help                   Show this help
+#    make remove-orphan-wasm     Remove orphaned embind .wasm/.js outputs
 
 # ========== Configuration ==========
 EIGEN_PATH := ../../deps/eigen-3.4.0
@@ -152,61 +152,16 @@ build-all: build-base-mesh build-cutseam-mesh build-solver build-lscm build-abf 
 
 build-page-all: build-simple-compat build-dgp-compat build-field-compat build-abel-compat build-bd-lscm
 
-# --- BaseMesh ---
-build-base-mesh: $(OUTPUT_DIR)/base_mesh.js
-$(OUTPUT_DIR)/base_mesh.js: bindings_base_mesh.cpp $(BASEMESH_SRCS)
+# --- Simple Compat (all methods + Gauss curvature, ccall) ---
+build-simple-compat: $(OUTPUT_DIR)/uv_unwrap_simple.js
+$(OUTPUT_DIR)/uv_unwrap_simple.js: bindings_uv_unwrap_simple_compat.cpp $(SIMPLE_COMPAT_SRCS)
 	@mkdir -p $(OUTPUT_DIR)
-	@echo "[BaseMesh] Compiling..."
-	$(CXX) $(CXXFLAGS) $(BASEMESH_INC) bindings_base_mesh.cpp $(BASEMESH_SRCS) \
-	       -o $@ $(EM_FLAGS) -s EXPORT_NAME="BaseMeshModule"
-	@echo "[BaseMesh] Done → $@"
+	@echo "[Simple-Compat] Compiling..."
+	$(CXX) $(CXXFLAGS) $(SIMPLE_COMPAT_INC) bindings_uv_unwrap_simple_compat.cpp $(SIMPLE_COMPAT_SRCS) \
+	       -o $@ $(EM_FLAGS_COMPAT) -s EXPORT_NAME="UvUnwrapSimpleSolver"
+	@echo "[Simple-Compat] Done → $@"
 
-# --- CutSeamMesh ---
-build-cutseam-mesh: $(OUTPUT_DIR)/cutseam_mesh.js
-$(OUTPUT_DIR)/cutseam_mesh.js: bindings_cutseam_mesh.cpp $(CUTSEAM_SRCS)
-	@mkdir -p $(OUTPUT_DIR)
-	@echo "[CutSeamMesh] Compiling..."
-	$(CXX) $(CXXFLAGS) $(CUTSEAM_INC) bindings_cutseam_mesh.cpp $(CUTSEAM_SRCS) \
-	       -o $@ $(EM_FLAGS) -s EXPORT_NAME="CutSeamMeshModule"
-	@echo "[CutSeamMesh] Done → $@"
-
-# --- Solver ---
-build-solver: $(OUTPUT_DIR)/solver.js
-$(OUTPUT_DIR)/solver.js: bindings_solver.cpp $(SOLVER_SRCS)
-	@mkdir -p $(OUTPUT_DIR)
-	@echo "[Solver] Compiling..."
-	$(CXX) $(CXXFLAGS) $(SOLVER_INC) bindings_solver.cpp $(SOLVER_SRCS) \
-	       -o $@ $(EM_FLAGS) -s EXPORT_NAME="SolverModule"
-	@echo "[Solver] Done → $@"
-
-# --- LSCM ---
-build-lscm: $(OUTPUT_DIR)/lscm.js
-$(OUTPUT_DIR)/lscm.js: bindings_lscm.cpp $(LSCM_SRCS)
-	@mkdir -p $(OUTPUT_DIR)
-	@echo "[LSCM] Compiling..."
-	$(CXX) $(CXXFLAGS) $(LSCM_INC) bindings_lscm.cpp $(LSCM_SRCS) \
-	       -o $@ $(EM_FLAGS) -s EXPORT_NAME="LSCMModule"
-	@echo "[LSCM] Done → $@"
-
-# --- ABF ---
-build-abf: $(OUTPUT_DIR)/abf.js
-$(OUTPUT_DIR)/abf.js: bindings_abf.cpp $(ABF_SRCS)
-	@mkdir -p $(OUTPUT_DIR)
-	@echo "[ABF] Compiling..."
-	$(CXX) $(CXXFLAGS) $(ABF_INC) bindings_abf.cpp $(ABF_SRCS) \
-	       -o $@ $(EM_FLAGS) -s EXPORT_NAME="ABFModule"
-	@echo "[ABF] Done → $@"
-
-# --- ARAP ---
-build-arap: $(OUTPUT_DIR)/arap.js
-$(OUTPUT_DIR)/arap.js: bindings_arap.cpp $(ARAP_SRCS)
-	@mkdir -p $(OUTPUT_DIR)
-	@echo "[ARAP] Compiling..."
-	$(CXX) $(CXXFLAGS) $(ARAP_INC) bindings_arap.cpp $(ARAP_SRCS) \
-	       -o $@ $(EM_FLAGS) -s EXPORT_NAME="ARAPModule"
-	@echo "[ARAP] Done → $@"
-
-# --- BD-LSCM (LSCM + Bounded Distortion Mapping) ---
+# --- BD-LSCM (LSCM + Bounded Distortion, embind) ---
 build-bd-lscm: $(OUTPUT_DIR)/bd_lscm.js
 $(OUTPUT_DIR)/bd_lscm.js: bindings_bd_lscm.cpp $(BD_LSCM_SRCS)
 	@mkdir -p $(OUTPUT_DIR)
@@ -217,23 +172,23 @@ $(OUTPUT_DIR)/bd_lscm.js: bindings_bd_lscm.cpp $(BD_LSCM_SRCS)
 	       -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','getValue','setValue','FS']"
 	@echo "[BD-LSCM] Done → $@"
 
-# --- DGP Basic 兼容层 (高斯曲率, ccall API) ---
-build-dgp-compat: $(OUTPUT_DIR)/dgp_basic.js
-$(OUTPUT_DIR)/dgp_basic.js: bindings_dgp_basic_compat.cpp $(DGP_COMPAT_SRCS)
+# --- Field Compat (QuadCover + HOF, ccall) ---
+build-field-compat: $(OUTPUT_DIR)/uv_unwrap_field.js
+$(OUTPUT_DIR)/uv_unwrap_field.js: bindings_uv_unwrap_field_compat.cpp $(FIELD_COMPAT_SRCS)
 	@mkdir -p $(OUTPUT_DIR)
-	@echo "[DGP-Compat] Compiling..."
-	$(CXX) $(CXXFLAGS) $(BASEMESH_INC) bindings_dgp_basic_compat.cpp $(DGP_COMPAT_SRCS) \
-	       -o $@ $(EM_FLAGS_COMPAT) -s EXPORT_NAME="DgpBasicSolver"
-	@echo "[DGP-Compat] Done → $@"
+	@echo "[Field-Compat] Compiling..."
+	$(CXX) $(CXXFLAGS) $(FIELD_COMPAT_INC) bindings_uv_unwrap_field_compat.cpp $(FIELD_COMPAT_SRCS) \
+	       -o $@ $(EM_FLAGS_COMPAT) -s EXPORT_NAME="UvUnwrapFieldSolver"
+	@echo "[Field-Compat] Done → $@"
 
-# --- Simple 兼容层 (所有参数化方法, ccall API) ---
-build-simple-compat: $(OUTPUT_DIR)/uv_unwrap_simple.js
-$(OUTPUT_DIR)/uv_unwrap_simple.js: bindings_uv_unwrap_simple_compat.cpp $(SIMPLE_COMPAT_SRCS)
+# --- Abel-Jacobi Compat (ccall) ---
+build-abel-compat: $(OUTPUT_DIR)/uv_unwrap_abel_jacobi.js
+$(OUTPUT_DIR)/uv_unwrap_abel_jacobi.js: bindings_uv_unwrap_abel_jacobi_compat.cpp $(ABEL_COMPAT_SRCS)
 	@mkdir -p $(OUTPUT_DIR)
-	@echo "[Simple-Compat] Compiling..."
-	$(CXX) $(CXXFLAGS) $(SIMPLE_COMPAT_INC) bindings_uv_unwrap_simple_compat.cpp $(SIMPLE_COMPAT_SRCS) \
-	       -o $@ $(EM_FLAGS_COMPAT) -s EXPORT_NAME="UvUnwrapSimpleSolver"
-	@echo "[Simple-Compat] Done → $@"
+	@echo "[Abel-Compat] Compiling..."
+	$(CXX) $(CXXFLAGS) $(ABEL_COMPAT_INC) bindings_uv_unwrap_abel_jacobi_compat.cpp $(ABEL_COMPAT_SRCS) \
+	       -o $@ $(EM_FLAGS_COMPAT) -s EXPORT_NAME="UvUnwrapAbelJacobiSolver"
+	@echo "[Abel-Compat] Done → $@"
 
 # --- Field 兼容层 (QuadCover / MIQ / HOF) ---
 build-field-compat: $(OUTPUT_DIR)/uv_unwrap_field.js
@@ -266,14 +221,24 @@ $(OUTPUT_DIR)/ruppert.js: bindings_ruppert_compat.cpp
 build-bdhm: $(OUTPUT_DIR)/bdhm.js
 $(OUTPUT_DIR)/bdhm.js: bindings_bdhm.cpp $(BDHM_SRCS)
 	@mkdir -p $(OUTPUT_DIR)
-	@echo "[BDHM] Compiling..."
-	$(CXX) $(CXXFLAGS) $(BDHM_INC) bindings_bdhm.cpp $(BDHM_SRCS) \
-	       -o $@ $(EM_FLAGS) -s EXPORT_NAME="BDHMModule"
-	@echo "[BDHM] Done → $@"
+	@echo "[BD-Deform-Compat] Compiling..."
+	$(CXX) $(CXXFLAGS) $(BD_DEFORM_COMPAT_INC) bindings_bd_deformation_compat.cpp $(BD_DEFORM_COMPAT_SRCS) \
+	       -o $@ $(EM_FLAGS_COMPAT) -s EXPORT_NAME="BdDeformationSolver"
+	@echo "[BD-Deform-Compat] Done → $@"
 
 # ========== Utility ==========
 clean:
 	@echo "Cleaning WASM outputs..."
+	-rm -f $(OUTPUT_DIR)/bd_lscm.js $(OUTPUT_DIR)/bd_lscm.wasm
+	-rm -f $(OUTPUT_DIR)/uv_unwrap_simple.js $(OUTPUT_DIR)/uv_unwrap_simple.wasm
+	-rm -f $(OUTPUT_DIR)/uv_unwrap_field.js $(OUTPUT_DIR)/uv_unwrap_field.wasm
+	-rm -f $(OUTPUT_DIR)/uv_unwrap_abel_jacobi.js $(OUTPUT_DIR)/uv_unwrap_abel_jacobi.wasm
+	-rm -f $(OUTPUT_DIR)/bd_deformation.js $(OUTPUT_DIR)/bd_deformation.wasm
+	@echo "Done."
+
+# Remove orphaned embind WASM outputs (from old architecture)
+remove-orphan-wasm:
+	@echo "Removing orphaned embind WASM outputs..."
 	-rm -f $(OUTPUT_DIR)/base_mesh.js  $(OUTPUT_DIR)/base_mesh.wasm
 	-rm -f $(OUTPUT_DIR)/cutseam_mesh.js $(OUTPUT_DIR)/cutseam_mesh.wasm
 	-rm -f $(OUTPUT_DIR)/solver.js  $(OUTPUT_DIR)/solver.wasm
@@ -300,7 +265,7 @@ check:
 	@echo ""
 
 help:
-	@echo "Conformal Parameterization — WASM Build System"
+	@echo "Conformal Parameterization — WASM Build System (精简版)"
 	@echo ""
 	@echo "Targets:"
 	@echo "  make build-base-mesh       Build BaseMesh module"
