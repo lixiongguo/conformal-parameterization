@@ -5,11 +5,13 @@
 #endif
 
 #include "FastHGP.h"
-#include "NotImplemented.h"
 #include "Utils/EigenLinearSolver.h"
+#include "Utils/FramesFile.h"
 #include "CGAL/CGAL_Macros.h"
 #include <CGAL/Timer.h>
 #include <Eigen/SparseLU>
+#include <cstdlib>
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 #include <unordered_set>
@@ -17,6 +19,18 @@
 #define M_2PI 6.28318530717958647693
 
 using Complex = FastHGPNumerics::Complex;
+
+void FastHGP::setSegSize(int segSize)
+{
+    if (segSize > 0) {
+        mSegSize = segSize;
+    }
+}
+
+void FastHGP::setFixCot(bool fixCot)
+{
+    mFixCot = fixCot;
+}
 
 bool FastHGP::run(std::string& objpath, std::string& vfPath)
 {
@@ -107,15 +121,23 @@ bool FastHGP::loadMesh(std::string& objpath, std::string& vfPath)
     if (mHasCones) {
         const std::string ffieldPostfix = ".ffield";
         const std::string matPostfix = ".mat";
+        const std::string fframesPostfix = ".fframes";
         bool hasFrames = false;
 
         if (vfPath.size() >= ffieldPostfix.size()
             && vfPath.compare(vfPath.size() - ffieldPostfix.size(), ffieldPostfix.size(), ffieldPostfix) == 0) {
             mCalcFramesFromVecField = true;
+            mFramesFromFile = false;
             hasFrames = Parser::loadVectorField(vfPath.c_str(), mCgalMesh);
-        } else if (vfPath.size() >= matPostfix.size()
-                   && vfPath.compare(vfPath.size() - matPostfix.size(), matPostfix.size(), matPostfix) == 0) {
-            FASTHGP_NOT_IMPLEMENTED("loading precomputed frames from .mat files (use .ffield vector field instead)");
+        } else if ((vfPath.size() >= matPostfix.size()
+                    && vfPath.compare(vfPath.size() - matPostfix.size(), matPostfix.size(), matPostfix) == 0)
+                   || (vfPath.size() >= fframesPostfix.size()
+                       && vfPath.compare(vfPath.size() - fframesPostfix.size(), fframesPostfix.size(), fframesPostfix)
+                              == 0)) {
+            mCalcFramesFromVecField = false;
+            mFramesFromFile = true;
+            mFramesFilePath = vfPath;
+            hasFrames = true;
         }
 
         if (!hasFrames) {
@@ -134,6 +156,16 @@ void FastHGP::getSettings()
 {
     mSegSize = 40;
     mFixCot = true;
+
+    if (const char* envSeg = std::getenv("FASTHGP_SEG_SIZE")) {
+        const int v = std::atoi(envSeg);
+        if (v > 0) {
+            mSegSize = v;
+        }
+    }
+    if (const char* envFix = std::getenv("FASTHGP_FIX_COT")) {
+        mFixCot = (std::atoi(envFix) != 0);
+    }
 }
 
 void FastHGP::getConesMap()
@@ -513,6 +545,10 @@ bool FastHGP::constructHarmonicBasis(int conesConstraintsStartRow)
 
     if (mHasCones && mCalcFramesFromVecField) {
         computeFramesFromVectorFieldInCpp();
+    } else if (mHasCones && mFramesFromFile) {
+        if (!loadPrecomputedFramesFromFile()) {
+            return false;
+        }
     }
 
     createJmatrixInCpp();
@@ -604,6 +640,26 @@ void FastHGP::computeFramesFromVectorFieldInCpp()
         double sinAng = std::sqrt(std::abs(1.0 - cosAng * cosAng));
         mFrames(f) = Complex(cosAng, signSin * sinAng);
     }
+}
+
+bool FastHGP::loadPrecomputedFramesFromFile()
+{
+    const int numF = static_cast<int>(mReducedFacets.size());
+    std::vector<std::complex<double>> frames;
+    if (!FramesFile::load(mFramesFilePath, frames)) {
+        return false;
+    }
+    if (static_cast<int>(frames.size()) != numF) {
+        std::cout << "Precomputed frames count (" << frames.size() << ") != reduced faces (" << numF
+                  << ")\n";
+        return false;
+    }
+
+    mFrames.resize(numF);
+    for (int f = 0; f < numF; ++f) {
+        mFrames(f) = frames[static_cast<size_t>(f)];
+    }
+    return true;
 }
 
 bool FastHGP::getATPInitialValue()
@@ -937,4 +993,58 @@ void FastHGP::putVertexInKernelUsingCVX(Vertex_handle v)
 void FastHGP::sendValuesToMatlabReport()
 {
     (void)0;
+}
+
+void FastHGP::visualize()
+{
+    // Pure C++ build: no MATLAB seam viewer (see HarmonicParametrization::visualize).
+}
+
+void FastHGP::calcDistortion()
+{
+    double areaWeightedK = 0.0;
+    double totalArea = 0.0;
+    double minK = 1e30;
+    double maxK = 0.0;
+
+    for_each_const_facet(f, mCgalMesh)
+    {
+        const double k = calcK(f);
+        const double area = f->area();
+        areaWeightedK += area * k;
+        totalArea += area;
+        minK = std::min(minK, k);
+        maxK = std::max(maxK, k);
+    }
+
+    if (totalArea > 0.0) {
+        areaWeightedK /= totalArea;
+    }
+    std::cout << "Distortion k: min=" << minK << " max=" << maxK << " area-weighted mean=" << areaWeightedK
+              << "\n";
+}
+
+void FastHGP::coneAngleDetection(int& numWrongAngles, int& numWrongConeAngles)
+{
+    numWrongConeAngles = 0;
+    numWrongAngles = 0;
+
+    for (Vertex_iterator v = mCgalMesh.vertices_begin(); v != mCgalMesh.vertices_end(); v++) {
+        const double sum = oneRingAngle(v);
+        if (v->isCone()) {
+            if (std::abs(v->getConeAngle() * M_PI - sum) > 0.01) {
+                ++numWrongConeAngles;
+                ++numWrongAngles;
+            }
+        } else if (!v->is_border()) {
+            if (std::abs(sum - M_2PI) > 0.01) {
+                ++numWrongAngles;
+            }
+        }
+    }
+
+    if (numWrongAngles > 0) {
+        std::cout << "Angle check: " << numWrongAngles << " problem vertices ("
+                  << numWrongConeAngles << " cones)\n";
+    }
 }

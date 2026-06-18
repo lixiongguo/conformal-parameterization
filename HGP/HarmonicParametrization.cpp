@@ -1,8 +1,10 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
 #include "HarmonicParametrization.h"
+#ifndef FASTHGP_STANDALONE
 #include "Utils/MatlabInterface.h"
 #include "Utils/MatlabGMMDataExchange.h"
+#endif
 #include "CGAL\CGAL_Macros.h"
 
 #ifndef M_PI
@@ -170,6 +172,7 @@ void HarmonicParametrization::checkForFoldovers(std::vector<Facet_handle>& flipp
 }
 void HarmonicParametrization::visualize()
 {
+#ifndef FASTHGP_STANDALONE
 	std::string visMatlab = MatlabInterface::GetEngine().EvalToString("fprintf(num2str(visMatlab))");
 
 	if (visMatlab.c_str()[0] == '0')	//save some time...
@@ -269,6 +272,7 @@ void HarmonicParametrization::visualize()
 		maltabVarName = mMethodName + ".Visualize.cones";
 		MatlabGMMDataExchange::SetEngineDenseMatrix(maltabVarName.c_str(), cones);*/
 	}
+#endif
 }
 
 int HarmonicParametrization::nextOnSeam(int h)
@@ -316,11 +320,17 @@ void HarmonicParametrization::calcDistortion()
 	double min_k = *(std::min_element(k.begin(), k.end()));
 	double max_k = *(std::max_element(k.begin(), k.end()));
 
+#ifndef FASTHGP_STANDALONE
 	GMMDenseColMatrix distortionVector(k.size(), 1);
 	for (int i = 0; i < (int)k.size(); ++i)
 		distortionVector(i, 0) = k[i];
 	std::string maltabVarName = mMethodName + ".Result.k";
 	MatlabGMMDataExchange::SetEngineDenseMatrix(maltabVarName.c_str(), distortionVector);
+#else
+	(void)min_k;
+	(void)max_k;
+	(void)average_k;
+#endif
 }
 
 double HarmonicParametrization::calcK(Facet_const_handle& face)
@@ -388,11 +398,14 @@ void HarmonicParametrization::coneAngleDetection(int& numWrongAngles, int& numWr
 	}
 	if (problem.size() == 0)
 	{
+#ifndef FASTHGP_STANDALONE
 		std::string maltabCommand = mMethodName + ".Result.problemVerticesIndices=[];" + mMethodName + ".Result.problemVerticesAngles=[];" + mMethodName + ".Result.desiredVerticesAngles = [];";
 		MatlabInterface::GetEngine().EvalToCout(maltabCommand.c_str());
+#endif
 	}
 	else
 	{
+#ifndef FASTHGP_STANDALONE
 		GMMDenseColMatrix problemVerticesIndices(problem.size(), 1), problemVerticesAngles(problem.size(), 1), desiredAngles(problem.size(), 1);
 		for (int i = 0; i < (int)problem.size(); ++i)
 		{
@@ -406,6 +419,7 @@ void HarmonicParametrization::coneAngleDetection(int& numWrongAngles, int& numWr
 		MatlabGMMDataExchange::SetEngineDenseMatrix(maltabVarName.c_str(), problemVerticesAngles);
 		maltabVarName = mMethodName + ".Result.desiredVerticesAngles";
 		MatlabGMMDataExchange::SetEngineDenseMatrix(maltabVarName.c_str(), desiredAngles);
+#endif
 	}
 	numWrongAngles = problem.size();
 

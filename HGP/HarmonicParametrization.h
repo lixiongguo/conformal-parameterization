@@ -30,12 +30,12 @@ protected:
 	void updateIndexOfHEinSystem();
 	void updatHalfedgeUVs();
 	void checkForFoldovers(std::vector<Facet_handle>& flippedTriangles);
-	void visualize();
+	virtual void visualize();
 	int nextOnSeam(int h);
 	int degreeOnSeam(int h);
-	void calcDistortion();
+	virtual void calcDistortion();
 	double calcK(Facet_const_handle& face);
-	void coneAngleDetection(int& numWrongAngles, int& numWrongConeAngles);
+	virtual void coneAngleDetection(int& numWrongAngles, int& numWrongConeAngles);
 	double oneRingAngle(Vertex_iterator& v);
 };
 

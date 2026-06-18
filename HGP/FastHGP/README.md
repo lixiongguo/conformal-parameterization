@@ -16,11 +16,39 @@
 - `../HGP/` 中的 CGAL 网格、`Borders`、`Parser`
 - Eigen（稠密 + 稀疏）
 - GMM：仅在父类 `HarmonicParametrization` 需要处使用（`mUVs`、`mRotationConstraints`）
-- **父类中仍有调用 MATLAB Engine 的代码**（见下文 [继承自 HarmonicParametrization 的 MATLAB 钩子](#4-继承自-harmonicparametrization-的-matlab-钩子)）
+- **FastHGP 本体不依赖 MATLAB**（`FASTHGP_STANDALONE` 构建；`visualize` 等已在 `FastHGP` 中重写）
 
-编译时加入 include 路径 `-I../HGP`（以及 CGAL）。入口：`FastHGP::run(objPath, vfPath)`。
+编译：
 
-目前 **没有** 独立的 CMake 目标；需手动链接 `FastHGP.cpp`、`FastHGPNumerics.cpp`、`Utils/EigenLinearSolver.cpp` 及所需的 `../HGP/*` 源文件。
+```bash
+cd cpp/conformal-parameterization/FastHGP
+cmake -B build -DEIGEN3_INCLUDE_DIR=... -DCGAL_DIR=... -DGMM_INCLUDE_DIR=...
+cmake --build build
+```
+
+生成静态库 `fasthgp`，定义 `FASTHGP_STANDALONE`（**不链接 MATLAB Engine**）。入口：`FastHGP::run(objPath, vfPath)`。
+
+### 运行时参数
+
+| 方式 | 说明 |
+|:---|:---|
+| `FastHGP::setSegSize(n)` / `setFixCot(bool)` | 在 `run()` 前调用 |
+| 环境变量 `FASTHGP_SEG_SIZE` | 覆盖 meta 顶点间距（默认 40） |
+| 环境变量 `FASTHGP_FIX_COT` | `0` 关闭 cot 折叠修复，非 `0` 开启（默认开启） |
+
+### 锥点 frames 输入
+
+| 文件 | 说明 |
+|:---|:---|
+| `.ffield` | 向量场（与原先相同） |
+| `.mat` | MATLAB v5/v7.2，`frames` 变量（`save('-v7',...)`）；不支持 v7.3 HDF5 |
+| `.fframes` | 纯文本，每行 `real imag`（推荐无 MATLAB 时使用） |
+
+MATLAB 导出 `.fframes` 示例：
+
+```matlab
+writematrix([real(frames), imag(frames)], 'model.fframes', 'Delimiter', ' ');
+```
 
 ## WASM `FastHGPSimple`
 
@@ -68,38 +96,21 @@
 
 ## 未实现 / 待办
 
-显式占位使用 `NotImplemented.h` 中的 `FASTHGP_NOT_IMPLEMENTED(msg)`。
+显式占位宏 `FASTHGP_NOT_IMPLEMENTED` 仍保留于 `NotImplemented.h`（当前无调用点）。
 
-### 1. 从 `.mat` 加载预计算 frames（阻断不用 `.ffield` 的锥点流程）
+### 1. ~~从 `.mat` 加载预计算 frames~~ → **已实现**
 
-| | |
-|:---|:---|
-| **触发条件** | `vfPath` 以 `.mat` 结尾，且 OBJ 含锥点 |
-| **代码位置** | `FastHGP::loadMesh` → 抛出 `FASTHGP_NOT_IMPLEMENTED` |
-| **原版实现** | `HGP.cpp`（约 L142–157）：`load(matLocation); HGP.frames = frames;` |
-| **临时方案** | 传入 `.ffield` 文件，走 `Parser::loadVectorField` + `computeFramesFromVectorFieldInCpp` |
+- 支持 `.mat`（v5/v7.2）与 `.fframes` 文本
+- 实现：`Utils/FramesFile.cpp`，`FastHGP::loadPrecomputedFramesFromFile`
+- v7.3 HDF5 格式请用 `save('-v7', ...)` 或改用 `.fframes`
 
-**实现步骤：**
-
-1. 增加读取器（MAT v7 可用 [matio](https://github.com/tbeu/matio)、HDF5，或将 frames 导出为简单文本/二进制格式）。
-2. 读入长度为 `|F_cb|` 的复数向量 `frames`（每个 `mReducedFacets` / `mReducedFaces` 中的三角形一个 frame，顺序与 `computeFramesFromVectorFieldInCpp` 一致）。
-3. 设置 `mCalcFramesFromVecField = false`，填入 `mFrames`；在 `constructHarmonicBasis` 中增加分支，当 frames 已从文件加载时跳过 `computeFramesFromVectorFieldInCpp`：
-
-```cpp
-// constructHarmonicBasis — 当前仅在 mCalcFramesFromVecField 时计算 frames
-if (mHasCones && mCalcFramesFromVecField) {
-    computeFramesFromVectorFieldInCpp();
-}
-// TODO: else if (mHasCones && mFramesLoadedFromFile) { /* mFrames 已就绪 */ }
-```
-
-### 2. 设置 GUI / 运行时配置
+### 2. ~~设置 GUI / 运行时配置~~ → **部分实现**
 
 | | |
 |:---|:---|
 | **已移除** | `FastHGP_settings.m` 模态 GUI |
-| **当前代码** | `getSettings()` 固定 `mSegSize=40`、`mFixCot=true` |
-| **待做** | 命令行参数、JSON/INI 配置文件，或在 `run()` 前提供 setter |
+| **已实现** | `setSegSize` / `setFixCot`；环境变量 `FASTHGP_SEG_SIZE`、`FASTHGP_FIX_COT` |
+| **待做** | 命令行解析、JSON/INI 配置文件 |
 
 ### 3. `FastHGP_report` 交互式报告
 
@@ -110,28 +121,17 @@ if (mHasCones && mCalcFramesFromVecField) {
 | **现状** | `testResult()` 向 stdout 打印 `success` / `partial success` / `fail` |
 | **待做** | 可选 HTML/JSON 报告，或接入自有查看器 |
 
-### 4. 继承自 `HarmonicParametrization` 的 MATLAB 钩子
+### 4. ~~继承自 `HarmonicParametrization` 的 MATLAB 钩子~~ → **FastHGP 已脱离**
 
-`FastHGP::run` 末尾仍调用父类方法，**需要 MATLAB Engine**（除非加守卫或重写）：
+`FastHGP` 重写 `visualize` / `calcDistortion` / `coneAngleDetection`（纯 C++）。  
+CMake 目标 `fasthgp` 定义 `FASTHGP_STANDALONE`，`HarmonicParametrization.cpp` 中不再编译 MATLAB 调用。
 
-| `FastHGP::run` 中的调用 | 父类方法 | MATLAB 用途 |
-|:---|:---|:---|
-| `visualize()` | `HarmonicParametrization::visualize` | 读取 workspace 变量 `visMatlab`；非零时通过 `MatlabGMMDataExchange` 推送 seam/锥点数据 |
-| `calcDistortion()` | `HarmonicParametrization::calcDistortion` | 写入 `FastHGP.Result.k` |
-| `coneAngleDetection()` | `HarmonicParametrization::coneAngleDetection` | 角误差时写入问题顶点数组 |
+仍使用 MATLAB 的是 **`HGP` 类**（未改），与 `FastHGP` 独立。
 
-**实现纯 C++、无 MATLAB 的桌面构建：**
+### 5. ~~桌面构建集成~~ → **已提供 CMake**
 
-- 在 `FastHGP` 中 override 上述三个方法，或
-- 在 `HarmonicParametrization.cpp` 中加 `#ifdef FASTHGP_NO_MATLAB` 空实现，或
-- 运行前在 MATLAB base workspace 设 `visMatlab = 0`（仅跳过 visualize 的重路径）。
-
-`sendValuesToMatlabReport` 已剥离；上述三处调用尚未处理。
-
-### 5. 桌面构建集成
-
-- `FastHGP/` 下无 `CMakeLists.txt` / VS 工程。
-- WASM 构建脚本仅编译 `FastHGPSimple.cpp`。
+- `FastHGP/CMakeLists.txt` → 静态库 `fasthgp`
+- WASM 构建脚本仍仅编译 `FastHGPSimple.cpp`
 
 ### 6. 网格 / 算法限制（主动检查，非占位）
 
@@ -153,14 +153,18 @@ if (mHasCones && mCalcFramesFromVecField) {
 
 ## 后续开发速查
 
-1. **锥点流程不依赖 MATLAB** → 实现 `.mat` frames 读取（§1），或始终使用 `.ffield`。
-2. **无头 / CI 构建** → 移除或 override MATLAB 钩子（§4）。
-3. **可调 `segSize` / `fixCot`** → 改写 `getSettings()`（§2）。
-4. **浏览器与论文管线对齐** → 将桌面管线移植到 WASM，或暴露服务端 `FastHGP::run`（见 WASM 对比表）。
-5. **与 MATLAB 对照** → `reference_matlab/` + `HGP.cpp` 中的历史混合代码；数值应与 `FastHGPNumerics` 一致。
+1. **MATLAB v7.3 `.mat`** → 用 `save('-v7',...)` 或 `.fframes`。
+2. **CLI / 配置文件** → 扩展 `getSettings()` 或增加 `tools/fasthgp_main.cpp`。
+3. **交互报告** → 替代 `FastHGP_report.m`（§3）。
+4. **浏览器与论文管线对齐** → 移植桌面管线到 WASM 或暴露服务端 `FastHGP::run`。
+5. **与 MATLAB 对照** → [MATLAB与C++对照表.md](MATLAB与C++对照表.md)。
 
 ## 参考
 
-MATLAB 原版在 `reference_matlab/`。桌面逻辑来自历史 MATLAB 混合实现（`MatlabInterface` / `MatlabGMMDataExchange` 调用已替换为 `FastHGP.cpp` 与 `FastHGPNumerics.cpp` 中的 C++）。
+| 文档 | 内容 |
+|:---|:---|
+| [MATLAB与C++对照表.md](MATLAB与C++对照表.md) | `reference_matlab/*.m` 与 C++ 函数逐文件对照、主流程与字段映射 |
+| `reference_matlab/` | MATLAB 原版脚本 |
+| `_posts/1.Parameterization/3.几何优化方法/全局调和参数化FastHGP.md` | 博客算法解读 |
 
-相关博客解读：`_posts/1.Parameterization/3.几何优化方法/全局调和参数化FastHGP.md`。
+桌面逻辑来自历史 MATLAB 混合实现（`MatlabInterface` / `MatlabGMMDataExchange` 调用已替换为 `FastHGP.cpp` 与 `FastHGPNumerics.cpp` 中的 C++）。

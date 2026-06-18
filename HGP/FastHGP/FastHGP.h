@@ -19,6 +19,14 @@ public:
 
     bool run(std::string& objpath, std::string& vfPath) override;
 
+    void setSegSize(int segSize);
+    void setFixCot(bool fixCot);
+
+protected:
+    void visualize() override;
+    void calcDistortion() override;
+    void coneAngleDetection(int& numWrongAngles, int& numWrongConeAngles) override;
+
 private:
     int mSegSize = 40;
     bool mFixCot = true;
@@ -26,6 +34,8 @@ private:
     int mNumDOF = 0;
     int mSizeOfMatrix = 0;
     bool mCalcFramesFromVecField = false;
+    bool mFramesFromFile = false;
+    std::string mFramesFilePath;
     bool mATPandNewtonPassed = false;
     bool mATPSuccess = true;
     double mTotalTime = 0.0;
@@ -75,6 +85,7 @@ private:
     bool calculateHarmonicBasisInPARDISO(int conesConstraintsStartRow);
     void createJmatrixInCpp();
     void computeFramesFromVectorFieldInCpp();
+    bool loadPrecomputedFramesFromFile();
 
     bool getATPInitialValue();
     bool getTutteInitialValue(Borders& borders);
