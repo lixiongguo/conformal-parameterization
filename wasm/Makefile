@@ -16,6 +16,7 @@
 
 # ========== Configuration ==========
 EIGEN_PATH := ../../deps/eigen-3.4.0
+CDT_PATH   := ../../CDT/CDT/include
 OUTPUT_DIR := ../../../assets/wasm
 
 CXX       := em++
@@ -210,14 +211,15 @@ $(OUTPUT_DIR)/uv_unwrap_abel_jacobi.js: bindings_uv_unwrap_abel_jacobi_compat.cp
 	       -o $@ $(EM_FLAGS_COMPAT) -s EXPORT_NAME="UvUnwrapAbelJacobiSolver"
 	@echo "[Abel-Compat] Done → $@"
 
-# --- Ruppert (Delaunay refinement, 自包含, 无依赖) ---
+# --- Ruppert (CDT + Delaunay refinement, ccall API) ---
+RUPPERT_INC := -I$(CDT_PATH)
 build-ruppert: $(OUTPUT_DIR)/ruppert.js
 $(OUTPUT_DIR)/ruppert.js: bindings_ruppert_compat.cpp
 	@mkdir -p $(OUTPUT_DIR)
-	@echo "[Ruppert] Compiling..."
-	$(CXX) $(CXXFLAGS) bindings_ruppert_compat.cpp \
+	@echo "[Ruppert/CDT] Compiling..."
+	$(CXX) $(CXXFLAGS) $(RUPPERT_INC) bindings_ruppert_compat.cpp \
 	       -o $@ $(EM_FLAGS_COMPAT) -s EXPORT_NAME="RuppertModule"
-	@echo "[Ruppert] Done → $@"
+	@echo "[Ruppert/CDT] Done → $@"
 
 # --- BD-HM (Bounded Distortion Harmonic Map) ---
 build-bdhm: $(OUTPUT_DIR)/bdhm.js
