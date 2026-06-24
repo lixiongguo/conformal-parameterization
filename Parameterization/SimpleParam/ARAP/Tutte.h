@@ -3,7 +3,7 @@
 
 #include "Parameterization.h"
 
-enum class TutteBoundary { CIRCLE, SQUARE };
+enum class TutteBoundary { CIRCLE, SQUARE, FREE };
 enum class TutteWeight { COTAN, UNIFORM };
 
 class Tutte : public Parameterization {
@@ -18,11 +18,14 @@ private:
     // fix boundary vertices to circle or square
     void pinBoundary();
     
+    // pin two vertices for free-boundary harmonic map (removes rigid DOFs)
+    void pinTwoVertices(std::vector<int>& pinVerts);
+    
     // find all boundary vertices in order
     void findBoundaryLoop(std::vector<int>& boundaryVerts) const;
     
-    // solve Laplacian system for interior vertices (cotan or uniform weights)
-    void solveLaplacian(const std::vector<int>& boundaryVerts);
+    // solve Laplacian for vertices not in fixedVerts (cotan or uniform weights)
+    void solveLaplacian(const std::vector<int>& fixedVerts);
     
     TutteBoundary m_shape;
     TutteWeight m_weight;

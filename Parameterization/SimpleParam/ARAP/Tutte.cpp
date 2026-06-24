@@ -47,21 +47,74 @@ void Tutte::pinBoundary()
     }
 }
 
-void Tutte::solveLaplacian(const std::vector<int>& boundaryVerts)
+void Tutte::pinTwoVertices(std::vector<int>& pinVerts)
+{
+    pinVerts.clear();
+    int bestA = 0, bestB = 1;
+    double maxDist2 = 0.0;
+    
+    // Farthest pair on boundary loops (same heuristic as LSCM)
+    for (HalfEdgeCIter heStart : mesh.boundaries) {
+        HalfEdgeCIter he1 = heStart;
+        do {
+            const int vIdx1 = he1->vertex->index;
+            const Eigen::Vector3d& p1 = he1->vertex->position;
+            
+            HalfEdgeCIter he2 = heStart;
+            do {
+                const int vIdx2 = he2->vertex->index;
+                if (vIdx1 >= vIdx2) { he2 = he2->next; continue; }
+                
+                const Eigen::Vector3d& p2 = he2->vertex->position;
+                const double d2 = (p2 - p1).squaredNorm();
+                if (d2 > maxDist2) {
+                    maxDist2 = d2;
+                    bestA = vIdx1;
+                    bestB = vIdx2;
+                }
+                he2 = he2->next;
+            } while (he2 != heStart);
+            
+            he1 = he1->next;
+        } while (he1 != heStart);
+    }
+    
+    // Fallback: no boundary (should not happen for disk meshes)
+    if (maxDist2 < 1e-24) {
+        const int N = (int)mesh.vertices.size();
+        for (int i = 0; i < N; i++) {
+            for (int j = i + 1; j < N; j++) {
+                const double d2 = (mesh.vertices[j].position - mesh.vertices[i].position).squaredNorm();
+                if (d2 > maxDist2) {
+                    maxDist2 = d2;
+                    bestA = i;
+                    bestB = j;
+                }
+            }
+        }
+    }
+    
+    const double d = std::sqrt(std::max(maxDist2, 1e-24));
+    mesh.vertices[bestA].uv = Eigen::Vector2d(0.0, 0.0);
+    mesh.vertices[bestB].uv = Eigen::Vector2d(d, 0.0);
+    pinVerts = {bestA, bestB};
+}
+
+void Tutte::solveLaplacian(const std::vector<int>& fixedVerts)
 {
     int N = (int)mesh.vertices.size();
-    int nInterior = N - (int)boundaryVerts.size();
-    if (nInterior <= 0) return;
+    int nFree = N - (int)fixedVerts.size();
+    if (nFree <= 0) return;
     
-    // Map: global -> interior idx (-1 for boundary)
+    // Map: global -> free idx (-1 for fixed)
     std::vector<int> iIdx(N, -1);
-    std::unordered_set<int> bSet(boundaryVerts.begin(), boundaryVerts.end());
+    std::unordered_set<int> fixedSet(fixedVerts.begin(), fixedVerts.end());
     int cnt = 0;
-    for (int i = 0; i < N; i++) if (!bSet.count(i)) iIdx[i] = cnt++;
+    for (int i = 0; i < N; i++) if (!fixedSet.count(i)) iIdx[i] = cnt++;
     
     std::vector<Eigen::Triplet<double>> triplets;
-    Eigen::VectorXd bx = Eigen::VectorXd::Zero(nInterior);
-    Eigen::VectorXd by = Eigen::VectorXd::Zero(nInterior);
+    Eigen::VectorXd bx = Eigen::VectorXd::Zero(nFree);
+    Eigen::VectorXd by = Eigen::VectorXd::Zero(nFree);
     
     // Iterate over faces to build Laplacian (cotan or uniform weights)
     for (FaceCIter f = mesh.faces.begin(); f != mesh.faces.end(); f++) {
@@ -76,26 +129,23 @@ void Tutte::solveLaplacian(const std::vector<int>& boundaryVerts)
             
             double w;
             if (m_weight == TutteWeight::UNIFORM) {
-                // Uniform weight: w_ij = 1 for every edge
                 w = 1.0;
             } else {
-                // Cotangent of angle at vertex a
                 Eigen::Vector3d e1 = mesh.vertices[b].position - mesh.vertices[a].position;
                 Eigen::Vector3d e2 = mesh.vertices[c].position - mesh.vertices[a].position;
                 double cotVal = e1.dot(e2) / std::max(e1.cross(e2).norm(), 1e-12);
                 w = std::max(cotVal, 1e-8);
             }
             
-            // Contribution to vertices b and c (the edge endpoints)
             for (int side = 0; side < 2; side++) {
                 int p = (side==0) ? b : c;
                 int q = (side==0) ? c : b;
                 
-                if (!bSet.count(p)) {
+                if (!fixedSet.count(p)) {
                     int rp = iIdx[p];
                     triplets.push_back(Eigen::Triplet<double>(rp, rp, w));
                     
-                    if (bSet.count(q)) {
+                    if (fixedSet.count(q)) {
                         bx(rp) += w * mesh.vertices[q].uv.x();
                         by(rp) += w * mesh.vertices[q].uv.y();
                     } else {
@@ -107,7 +157,7 @@ void Tutte::solveLaplacian(const std::vector<int>& boundaryVerts)
         }
     }
     
-    Eigen::SparseMatrix<double> L(nInterior, nInterior);
+    Eigen::SparseMatrix<double> L(nFree, nFree);
     L.setFromTriplets(triplets.begin(), triplets.end());
     
     Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver(L);
@@ -115,7 +165,7 @@ void Tutte::solveLaplacian(const std::vector<int>& boundaryVerts)
         Eigen::VectorXd ux = solver.solve(bx);
         Eigen::VectorXd uy = solver.solve(by);
         for (int i = 0; i < N; i++) {
-            if (!bSet.count(i)) {
+            if (!fixedSet.count(i)) {
                 mesh.vertices[i].uv = Eigen::Vector2d(ux(iIdx[i]), uy(iIdx[i]));
             }
         }
@@ -124,9 +174,13 @@ void Tutte::solveLaplacian(const std::vector<int>& boundaryVerts)
 
 void Tutte::parameterize()
 {
-    pinBoundary();
-    std::vector<int> boundaryVerts;
-    findBoundaryLoop(boundaryVerts);
-    solveLaplacian(boundaryVerts);
+    std::vector<int> fixedVerts;
+    if (m_shape == TutteBoundary::FREE) {
+        pinTwoVertices(fixedVerts);
+    } else {
+        pinBoundary();
+        findBoundaryLoop(fixedVerts);
+    }
+    solveLaplacian(fixedVerts);
     normalize();
 }

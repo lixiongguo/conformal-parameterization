@@ -74,13 +74,8 @@ extern "C" {
 EMSCRIPTEN_KEEPALIVE
 void dispose() {
     if (g_mesh) { delete g_mesh; g_mesh = nullptr; }
-<<<<<<< HEAD
-    g_uv.clear(); g_qc_errors.clear(); g_qc_colors.clear();
-    g_last_time = 0.0;
-=======
     g_uv.clear(); g_gc.clear(); g_qc_errors.clear(); g_qc_colors.clear();
-    g_cp_fallback = false; g_last_time = 0.0;
->>>>>>> 313a4a3 (mac build wasm修改)
+    g_last_time = 0.0;
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -135,6 +130,21 @@ int solve_tutte_square(double* pos, int posLen, int* face, int faceLen, int w) {
 }
 
 EMSCRIPTEN_KEEPALIVE
+int solve_tutte_free(double* pos, int posLen, int* face, int faceLen, int w) {
+    dispose(); g_mesh = new Mesh();
+    buildMeshFrom(pos, posLen, face, faceLen);
+    if (g_mesh->boundaries.empty()) return -3;
+    Tutte t(*g_mesh, TutteBoundary::FREE,
+            (w == 1) ? TutteWeight::UNIFORM : TutteWeight::COTAN);
+    auto t0 = std::chrono::steady_clock::now();
+    t.parameterize();
+    recordTime(t0);
+    if (!hasValidUvSpread()) return -2;
+    extractUV();
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
 int solve_linabf(double* pos, int posLen, int* face, int faceLen) {
     dispose(); g_mesh = new Mesh();
     buildMeshFrom(pos, posLen, face, faceLen);
@@ -166,10 +176,12 @@ EMSCRIPTEN_KEEPALIVE
 int solve_arap(double* pos, int posLen, int* face, int faceLen, int maxIter) {
     dispose(); g_mesh = new Mesh();
     buildMeshFrom(pos, posLen, face, faceLen);
+    if (g_mesh->boundaries.empty()) return -3;
     ARAP arap(*g_mesh, maxIter > 0 ? maxIter : 30);
     auto t0 = std::chrono::steady_clock::now();
     arap.parameterize();
     recordTime(t0);
+    if (!hasValidUvSpread()) return -2;
     extractUV();
     return 0;
 }
