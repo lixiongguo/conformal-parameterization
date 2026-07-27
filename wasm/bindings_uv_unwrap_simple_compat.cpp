@@ -15,6 +15,7 @@
 #include "CirclePatterns.h"
 #include "Cetm.h"
 #include "RicciFlow.h"
+#include "IncrementalFlattening.h"
 #include <chrono>
 #include <vector>
 #include <cmath>
@@ -27,6 +28,9 @@ static std::vector<double> g_gc;
 static double              g_last_time = 0.0;
 static std::vector<double> g_qc_errors;
 static std::vector<double> g_qc_colors;
+static std::vector<int>    g_cones;
+static std::vector<double> g_cone_K;
+static int                 g_seam_edge_count = 0;
 
 // ========== 辅助 ==========
 static void buildMeshFrom(double* flatPos, int posLen, int* flatFace, int faceLen) {
@@ -75,6 +79,8 @@ EMSCRIPTEN_KEEPALIVE
 void dispose() {
     if (g_mesh) { delete g_mesh; g_mesh = nullptr; }
     g_uv.clear(); g_gc.clear(); g_qc_errors.clear(); g_qc_colors.clear();
+    g_cones.clear(); g_cone_K.clear();
+    g_seam_edge_count = 0;
     g_last_time = 0.0;
 }
 
@@ -260,6 +266,39 @@ int solve_ricci(double* pos, int posLen, int* face, int faceLen, int optScheme,
     extractUV();
     return 0;
 }
+
+// ---- Incremental Flattening (auto cone selection + seamless ARAP) ----
+EMSCRIPTEN_KEEPALIVE
+int solve_incremental_flattening(double* pos, int posLen, int* face, int faceLen,
+                                 int maxFlattenIters, int maxArapIters) {
+    dispose(); g_mesh = new Mesh();
+    buildMeshFrom(pos, posLen, face, faceLen);
+    IncrementalFlattening param(*g_mesh);
+    if (maxFlattenIters > 0) param.setMaxFlatteningIters(maxFlattenIters);
+    if (maxArapIters > 0) param.setMaxArapIters(maxArapIters);
+    auto t0 = std::chrono::steady_clock::now();
+    param.parameterize();
+    recordTime(t0);
+    if (!hasValidUvSpread()) return -2;
+    extractUV();
+    g_cones = param.coneVertices();
+    g_cone_K.assign(param.coneCurvatures().data(),
+                    param.coneCurvatures().data() + param.coneCurvatures().size());
+    g_seam_edge_count = param.seamEdgeCount();
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int get_cone_count() { return (int)g_cones.size(); }
+
+EMSCRIPTEN_KEEPALIVE
+int* get_cone_indices() { return g_cones.data(); }
+
+EMSCRIPTEN_KEEPALIVE
+double* get_cone_curvatures() { return g_cone_K.data(); }
+
+EMSCRIPTEN_KEEPALIVE
+int get_seam_edge_count() { return g_seam_edge_count; }
 
 // ---- UV 结果 ----
 EMSCRIPTEN_KEEPALIVE

@@ -178,7 +178,9 @@ void IncrementalFlattening::buildVertexAreas(Eigen::VectorXd& areas) const
         const int a = F[f * 3];
         const int b = F[f * 3 + 1];
         const int c = F[f * 3 + 2];
-        const double area = 0.5 * (V.row(b) - V.row(a)).cross(V.row(c) - V.row(a)).norm();
+        const Vector3d e1 = V.row(b) - V.row(a);
+        const Vector3d e2 = V.row(c) - V.row(a);
+        const double area = 0.5 * e1.cross(e2).norm();
         if (!std::isfinite(area) || area <= 0.0) continue;
         const double third = area / 3.0;
         areas(a) += third;
@@ -407,7 +409,7 @@ void IncrementalFlattening::roundingPhase()
         targetK[pick] = roundToHalfPi(targetK[pick]);
 
         std::vector<int> constraints;
-        VectorXd rhs(0);
+        VectorXd rhs = VectorXd::Zero(0);
         buildConstraints(constraints, rhs);
 
         VectorXd phiStep;
@@ -871,7 +873,9 @@ bool IncrementalFlattening::solveEdgeOmegas(
     A.setFromTriplets(trips.begin(), trips.end());
     VectorXd b = Map<const VectorXd>(rhs.data(), static_cast<int>(rhs.size()));
 
-    const SparseMatrix<double> AtA = A.transpose() * A + kReg * SparseMatrix<double>(Identity(nOmega, nOmega));
+    SparseMatrix<double> Iomega(nOmega, nOmega);
+    Iomega.setIdentity();
+    const SparseMatrix<double> AtA = A.transpose() * A + kReg * Iomega;
     const VectorXd Atb = A.transpose() * b;
 
     SimplicialLDLT<SparseMatrix<double>> solver;
@@ -911,11 +915,17 @@ double IncrementalFlattening::transportAngle(int fFrom, int fTo, int edgeIdx) co
     edgeDirInFace(fTo, t1, h1);
     if (t0 < 0 || t1 < 0) return 0.0;
 
+    auto faceNormal = [&](int f) {
+        const Vector3d a = V.row(F[f * 3]);
+        const Vector3d b = V.row(F[f * 3 + 1]);
+        const Vector3d c = V.row(F[f * 3 + 2]);
+        return Vector3d((b - a).cross(c - a));
+    };
+
     auto tangentAt = [&](int f, int from, int to) {
         const Vector3d p = V.row(from);
         const Vector3d q = V.row(to);
-        Vector3d n = (V.row(F[f * 3 + 1]) - V.row(F[f * 3]))
-                         .cross(V.row(F[f * 3 + 2]) - V.row(F[f * 3]));
+        Vector3d n = faceNormal(f);
         n.normalize();
         Vector3d t = q - p;
         t -= t.dot(n) * n;
@@ -925,8 +935,7 @@ double IncrementalFlattening::transportAngle(int fFrom, int fTo, int edgeIdx) co
 
     const Vector3d u0 = tangentAt(fFrom, t0, h0);
     const Vector3d u1 = tangentAt(fTo, t1, h1);
-    Vector3d n0 = (V.row(F[fFrom * 3 + 1]) - V.row(F[fFrom * 3]))
-                      .cross(V.row(F[fFrom * 3 + 2]) - V.row(F[fFrom * 3]));
+    Vector3d n0 = faceNormal(fFrom);
     n0.normalize();
     const double x = u0.dot(u1);
     const double y = n0.dot(u0.cross(u1));
@@ -976,7 +985,9 @@ void IncrementalFlattening::solveCrossField(const Eigen::VectorXd& omega,
     A.setFromTriplets(trips.begin(), trips.end());
     VectorXd b = Map<const VectorXd>(rhs.data(), static_cast<int>(rhs.size()));
 
-    const SparseMatrix<double> AtA = A.transpose() * A + kReg * SparseMatrix<double>(Identity(nF, nF));
+    SparseMatrix<double> Ifaces(nF, nF);
+    Ifaces.setIdentity();
+    const SparseMatrix<double> AtA = A.transpose() * A + kReg * Ifaces;
     const VectorXd Atb = A.transpose() * b;
 
     SimplicialLDLT<SparseMatrix<double>> solver;
