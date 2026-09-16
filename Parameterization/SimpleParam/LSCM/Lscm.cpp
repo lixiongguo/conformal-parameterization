@@ -11,38 +11,59 @@ void Lscm::pinVertices()
 {
     pinnedVertices.resize(2);
     pinnedPositions = {Eigen::Vector2d(-0.5, 0), Eigen::Vector2d(0.5, 0)};
-    
-     // pin diameter vertices on longest boundary loop
+
     double max = 0.0;
-    for (std::vector<HalfEdgeIter>::const_iterator it1 = mesh.boundaries.begin();
-                                                   it1 != mesh.boundaries.end();
-                                                   it1++) {
-        HalfEdgeCIter he1 = *it1;
-        do {
-            const int& vIdx1(he1->vertex->index);
-            const Eigen::Vector3d& p1(he1->vertex->position);
-            
-            for (std::vector<HalfEdgeIter>::const_iterator it2 = mesh.boundaries.begin();
-                                                           it2 != mesh.boundaries.end();
-                                                           it2++) {
-                HalfEdgeCIter he2 = *it2;
-                do {
-                    const int& vIdx2(he2->vertex->index);
-                    const Eigen::Vector3d& p2(he2->vertex->position);
-                    double l = (p2-p1).squaredNorm();
-                    
-                    if (l > max) {
-                        max = l;
-                        pinnedVertices[0] = 2*vIdx1;
-                        pinnedVertices[1] = 2*vIdx2;
-                    }
-                    
-                    he2 = he2->next;
-                } while (he2 != *it2);
+
+    if (!mesh.boundaries.empty()) {
+        // pin diameter vertices on longest boundary loop
+        for (std::vector<HalfEdgeIter>::const_iterator it1 = mesh.boundaries.begin();
+                                                       it1 != mesh.boundaries.end();
+                                                       it1++) {
+            HalfEdgeCIter he1 = *it1;
+            do {
+                const int& vIdx1(he1->vertex->index);
+                const Eigen::Vector3d& p1(he1->vertex->position);
+
+                for (std::vector<HalfEdgeIter>::const_iterator it2 = mesh.boundaries.begin();
+                                                               it2 != mesh.boundaries.end();
+                                                               it2++) {
+                    HalfEdgeCIter he2 = *it2;
+                    do {
+                        const int& vIdx2(he2->vertex->index);
+                        const Eigen::Vector3d& p2(he2->vertex->position);
+                        double l = (p2-p1).squaredNorm();
+
+                        if (l > max) {
+                            max = l;
+                            pinnedVertices[0] = 2*vIdx1;
+                            pinnedVertices[1] = 2*vIdx2;
+                        }
+
+                        he2 = he2->next;
+                    } while (he2 != *it2);
+                }
+
+                he1 = he1->next;
+            } while (he1 != *it1);
+        }
+    } else {
+        // closed mesh: pin vertex 0 and the farthest vertex from it
+        pinnedVertices[0] = 0;
+        pinnedVertices[1] = 0;
+        if (!mesh.vertices.empty()) {
+            const Eigen::Vector3d& p0(mesh.vertices[0].position);
+            for (VertexCIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
+                double l = (v->position - p0).squaredNorm();
+                if (l > max) {
+                    max = l;
+                    pinnedVertices[1] = 2*v->index;
+                }
             }
-            
-            he1 = he1->next;
-        } while (he1 != *it1);
+            // ensure the two pins are distinct even if all vertices coincide
+            if (pinnedVertices[1] == pinnedVertices[0] && mesh.vertices.size() > 1) {
+                pinnedVertices[1] = 2; // vertex index 1
+            }
+        }
     }
 }
 
