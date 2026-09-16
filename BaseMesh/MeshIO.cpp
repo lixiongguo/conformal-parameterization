@@ -117,6 +117,11 @@ void MeshIO::checkNonManifoldVertices(const Mesh& mesh)
     }
     
     for (VertexCIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
+        // 孤立顶点(不属于任何面)的 he 指向空的 isolated 哨兵向量,并非真实半边。
+        // 若继续执行 he->flip->next 会解引用非法地址,在 wasm 下表现为
+        // "memory access out of bounds"。这里必须跳过。
+        if (v->isIsolated()) continue;
+
         int valence = 0;
         HalfEdgeCIter he = v->he;
         do {

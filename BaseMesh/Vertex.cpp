@@ -11,6 +11,9 @@ bool Vertex::isIsolated() const
 
 bool Vertex::isBoundary() const
 {
+    // 孤立顶点的 he 指向空的 isolated 哨兵,没有可遍历的半边环
+    if (isIsolated()) return false;
+
     HalfEdgeCIter h = he;
     do {
         if (h->onBoundary) return true;
@@ -23,6 +26,9 @@ bool Vertex::isBoundary() const
 
 int Vertex::degree() const
 {
+    // 孤立顶点没有关联半边
+    if (isIsolated()) return 0;
+
     int k = 0;
     HalfEdgeCIter h = he;
     do {

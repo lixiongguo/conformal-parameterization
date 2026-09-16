@@ -33,7 +33,13 @@ static std::vector<double> g_cone_K;
 static int                 g_seam_edge_count = 0;
 
 // ========== 辅助 ==========
-static void buildMeshFrom(double* flatPos, int posLen, int* flatFace, int faceLen) {
+// 返回 false 表示 MeshIO::buildMesh 失败(非流形边 edgeCount>2 / 退化面 n<3)。
+// 失败时 buildMesh 会在 indexElements() 之前提前 return:此时 mesh 里各元素的
+// index 字段、半边链接和 boundaries 都不完整,继续跑求解器会拿到垃圾索引并越界
+// 写内存(表现为晚一些才出现的 "memory access out of bounds")。各入口必须转成 -4。
+// 错误码约定:-2 UV 结果退化,-3 需要带边界的网格,-4 网格构建失败,
+//             -5 求解器内部校验失败(LSCM 已放弃,UV 结果无效)
+static bool buildMeshFrom(double* flatPos, int posLen, int* flatFace, int faceLen) {
     int nV = posLen / 3, nF = faceLen / 3;
     MeshData data;
     data.positions.reserve(nV);
@@ -45,7 +51,7 @@ static void buildMeshFrom(double* flatPos, int posLen, int* flatFace, int faceLe
                                 Index(flatFace[f*3+1], -1, -1),
                                 Index(flatFace[f*3+2], -1, -1)});
     }
-    MeshIO::buildMesh(data, *g_mesh);
+    return MeshIO::buildMesh(data, *g_mesh);
 }
 
 static void extractUV() {
@@ -87,11 +93,12 @@ void dispose() {
 EMSCRIPTEN_KEEPALIVE
 int solve_lscm(double* pos, int posLen, int* face, int faceLen, int /*a1*/, int /*a2*/) {
     dispose(); g_mesh = new Mesh();
-    buildMeshFrom(pos, posLen, face, faceLen);
+    if (!buildMeshFrom(pos, posLen, face, faceLen)) return -4;
     Lscm lscm(*g_mesh);
     auto t0 = std::chrono::steady_clock::now();
     lscm.parameterize();
     recordTime(t0);
+    if (!lscm.succeeded()) return -5;
     extractUV();
     return 0;
 }
@@ -99,7 +106,8 @@ int solve_lscm(double* pos, int posLen, int* face, int faceLen, int /*a1*/, int 
 EMSCRIPTEN_KEEPALIVE
 int solve_scp(double* pos, int posLen, int* face, int faceLen) {
     dispose(); g_mesh = new Mesh();
-    buildMeshFrom(pos, posLen, face, faceLen);
+    if (!buildMeshFrom(pos, posLen, face, faceLen)) return -4;
+    if (g_mesh->boundaries.empty()) return -3;
     Scp scp(*g_mesh);
     auto t0 = std::chrono::steady_clock::now();
     scp.parameterize();
@@ -111,7 +119,8 @@ int solve_scp(double* pos, int posLen, int* face, int faceLen) {
 EMSCRIPTEN_KEEPALIVE
 int solve_tutte_circle(double* pos, int posLen, int* face, int faceLen, int w) {
     dispose(); g_mesh = new Mesh();
-    buildMeshFrom(pos, posLen, face, faceLen);
+    if (!buildMeshFrom(pos, posLen, face, faceLen)) return -4;
+    if (g_mesh->boundaries.empty()) return -3;
     Tutte t(*g_mesh,
             (w == 1) ? TutteBoundary::CIRCLE : TutteBoundary::CIRCLE,
             (w == 1) ? TutteWeight::UNIFORM : TutteWeight::COTAN);
@@ -125,7 +134,8 @@ int solve_tutte_circle(double* pos, int posLen, int* face, int faceLen, int w) {
 EMSCRIPTEN_KEEPALIVE
 int solve_tutte_square(double* pos, int posLen, int* face, int faceLen, int w) {
     dispose(); g_mesh = new Mesh();
-    buildMeshFrom(pos, posLen, face, faceLen);
+    if (!buildMeshFrom(pos, posLen, face, faceLen)) return -4;
+    if (g_mesh->boundaries.empty()) return -3;
     Tutte t(*g_mesh, TutteBoundary::SQUARE,
             (w == 1) ? TutteWeight::UNIFORM : TutteWeight::COTAN);
     auto t0 = std::chrono::steady_clock::now();
@@ -213,7 +223,7 @@ EMSCRIPTEN_KEEPALIVE
 int solve_cp(double* pos, int posLen, int* face, int faceLen, int optScheme,
              int* coneIdx, int coneIdxLen, double* coneAngles, int coneAnglesLen) {
     dispose(); g_mesh = new Mesh();
-    buildMeshFrom(pos, posLen, face, faceLen);
+    if (!buildMeshFrom(pos, posLen, face, faceLen)) return -4;
     auto t0 = std::chrono::steady_clock::now();
     g_mesh->delaunayize();
     CirclePatterns p(*g_mesh, optScheme);
@@ -233,7 +243,7 @@ EMSCRIPTEN_KEEPALIVE
 int solve_cetm(double* pos, int posLen, int* face, int faceLen, int optScheme,
                int* coneIdx, int coneIdxLen, double* coneAngles, int coneAnglesLen) {
     dispose(); g_mesh = new Mesh();
-    buildMeshFrom(pos, posLen, face, faceLen);
+    if (!buildMeshFrom(pos, posLen, face, faceLen)) return -4;
     auto t0 = std::chrono::steady_clock::now();
     g_mesh->delaunayize();
     Cetm p(*g_mesh, optScheme);
@@ -252,7 +262,7 @@ EMSCRIPTEN_KEEPALIVE
 int solve_ricci(double* pos, int posLen, int* face, int faceLen, int optScheme,
                 int* coneIdx, int coneIdxLen, double* coneAngles, int coneAnglesLen) {
     dispose(); g_mesh = new Mesh();
-    buildMeshFrom(pos, posLen, face, faceLen);
+    if (!buildMeshFrom(pos, posLen, face, faceLen)) return -4;
     auto t0 = std::chrono::steady_clock::now();
     g_mesh->delaunayize();
     RicciFlow p(*g_mesh, optScheme);
@@ -272,7 +282,7 @@ EMSCRIPTEN_KEEPALIVE
 int solve_incremental_flattening(double* pos, int posLen, int* face, int faceLen,
                                  int maxFlattenIters, int maxArapIters) {
     dispose(); g_mesh = new Mesh();
-    buildMeshFrom(pos, posLen, face, faceLen);
+    if (!buildMeshFrom(pos, posLen, face, faceLen)) return -4;
     IncrementalFlattening param(*g_mesh);
     if (maxFlattenIters > 0) param.setMaxFlatteningIters(maxFlattenIters);
     if (maxArapIters > 0) param.setMaxArapIters(maxArapIters);
@@ -315,7 +325,7 @@ EMSCRIPTEN_KEEPALIVE
 int load_mesh_with_uv(double* pos, int posLen, int* face, int faceLen,
                        double* uvFlat, int /*uvLen*/) {
     dispose(); g_mesh = new Mesh();
-    buildMeshFrom(pos, posLen, face, faceLen);
+    if (!buildMeshFrom(pos, posLen, face, faceLen)) return -4;
     int nV = (int)g_mesh->vertices.size();
     for (int i = 0; i < nV; ++i) {
         g_mesh->vertices[i].uv.x() = uvFlat[i*2];
@@ -369,7 +379,7 @@ EMSCRIPTEN_KEEPALIVE
 int dgp_load_mesh(double* flatPos, int posLen, int* flatFace, int faceLen) {
     dispose();
     g_mesh = new Mesh();
-    buildMeshFrom(flatPos, posLen, flatFace, faceLen);
+    if (!buildMeshFrom(flatPos, posLen, flatFace, faceLen)) return -4;
     return (g_mesh->vertices.empty()) ? -1 : 0;
 }
 
