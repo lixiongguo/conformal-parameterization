@@ -19,19 +19,28 @@ EIGEN_PATH := ../../deps/eigen-3.4.0
 OUTPUT_DIR := ../../../assets/wasm
 
 CXX       := em++
-CXXFLAGS  := -O3 -std=c++17 -Wall -Wextra
+# EIGEN_STACK_ALLOCATION_LIMIT=0：Eigen 的 ei_declare_aligned_stack_constructed_variable
+# 默认把 <=128KB 的临时缓冲放在栈上(alloca)，而 wasm 默认栈只有 64KB。
+# SimplicialCholeskyBase::analyzePattern_preordered(Index tags[size]) 与
+# factorize_preordered(y[size]/pattern[size]/tags[size]) 在 v>16384 时会 alloca
+# 91KB~182KB，直接栈溢出；未开 STACK_OVERFLOW_CHECK 时表现为
+# "memory access out of bounds"（页面会误报成"内存越界/内存不够"）。
+# 置 0 后这些缓冲一律走 aligned_malloc。
+CXXFLAGS  := -O3 -std=c++17 -Wall -Wextra -DEIGEN_STACK_ALLOCATION_LIMIT=0
 
 # Common Emscripten link flags
 EM_FLAGS  := --bind \
              -s MODULARIZE=1 \
              -s ALLOW_MEMORY_GROWTH=1 \
              -s WASM=1 \
+             -s STACK_SIZE=1048576 \
              -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','getValue','setValue']"
 
 # Compat flags (no --bind, EMSCRIPTEN_KEEPALIVE for ccall API)
 EM_FLAGS_COMPAT := -s MODULARIZE=1 \
              -s ALLOW_MEMORY_GROWTH=1 \
              -s WASM=1 \
+             -s STACK_SIZE=1048576 \
              -s EXPORTED_FUNCTIONS="['_malloc','_free']" \
              -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','getValue','setValue']"
 
