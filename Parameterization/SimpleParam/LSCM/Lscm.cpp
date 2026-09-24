@@ -8,6 +8,19 @@ lastRunOk(false)
     
 }
 
+// 由调用方(wasm 绑定 / 前端「改pin点」)指定 pin 顶点。
+// 内部统一以 2*vertexIndex 作为无约束列的下标基准(见 isPinnedVertex / buildMassMatrix),
+// 所以这里同样存 2*v。pin 的目标 UV 与自动选点时保持一致:(-0.5,0) 与 (0.5,0)。
+void Lscm::setPins(int v0, int v1)
+{
+    if (v0 < 0 || v1 < 0 || v0 == v1) return;   // 非法输入:保持未设置,交给 parameterize() 自动选点
+
+    pinnedPositions = {Eigen::Vector2d(-0.5, 0), Eigen::Vector2d(0.5, 0)};
+    pinnedVertices.assign(2, -1);
+    pinnedVertices[0] = 2*v0;
+    pinnedVertices[1] = 2*v1;
+}
+
 void Lscm::pinVertices()
 {
     pinnedVertices.assign(2, -1);
@@ -233,8 +246,10 @@ void Lscm::parameterize()
         return;
     }
 
-    // pin vertices
-    pinVertices();
+    // pin vertices:调用方已用 setPins() 指定时,跳过自动选点
+    if (pinnedVertices.size() != 2) {
+        pinVertices();
+    }
 
     // 校验 pin:必须是两个互异且下标合法的顶点,否则 isPinnedVertex 的 shift 语义不成立
     const int nV2 = 2*static_cast<int>(mesh.vertices.size());

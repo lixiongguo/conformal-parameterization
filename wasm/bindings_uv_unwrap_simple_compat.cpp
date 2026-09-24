@@ -91,10 +91,17 @@ void dispose() {
 }
 
 EMSCRIPTEN_KEEPALIVE
-int solve_lscm(double* pos, int posLen, int* face, int faceLen, int /*a1*/, int /*a2*/) {
+int solve_lscm(double* pos, int posLen, int* face, int faceLen, int a1, int a2) {
     dispose(); g_mesh = new Mesh();
     if (!buildMeshFrom(pos, posLen, face, faceLen)) return -4;
     Lscm lscm(*g_mesh);
+    // a1/a2 是页面「改pin点」选中的两个顶点序号(与 pos 的顺序一致)。
+    // 以前这里被写成 int /*a1*/, int /*a2*/ 直接丢弃,导致自定义 pin 完全不生效。
+    // 越界/相同/未指定时不调用 setPins(),回落到 Lscm 内部的"边界最远两点"。
+    const int nV = (int)g_mesh->vertices.size();
+    if (a1 >= 0 && a2 >= 0 && a1 < nV && a2 < nV && a1 != a2) {
+        lscm.setPins(a1, a2);
+    }
     auto t0 = std::chrono::steady_clock::now();
     lscm.parameterize();
     recordTime(t0);
