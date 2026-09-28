@@ -188,5 +188,5 @@ void Tutte::parameterize()
         findBoundaryLoop(fixedVerts);
     }
     solveLaplacian(fixedVerts);
-    normalize();
+    if (m_normalize) normalize();
 }

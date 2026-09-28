@@ -24,6 +24,8 @@
 
 static Mesh*               g_mesh = nullptr;
 static std::vector<double> g_uv;
+// ARAP 的 Tutte 初始化 UV（扁平 2N），供页面做「初始 / 优化后」双视图对比
+static std::vector<double> g_arap_init_uv;
 // ARAP 逐次迭代收敛指标，每条 4 个 double：[迭代号, 能量, 面积畸变, 翻面数]
 static std::vector<double> g_arap_iters;
 static const int           ARAP_ITER_STRIDE = 4;
@@ -88,6 +90,7 @@ EMSCRIPTEN_KEEPALIVE
 void dispose() {
     if (g_mesh) { delete g_mesh; g_mesh = nullptr; }
     g_uv.clear(); g_gc.clear(); g_qc_errors.clear(); g_qc_colors.clear();
+    g_arap_init_uv.clear();
     g_arap_iters.clear();
     g_cones.clear(); g_cone_K.clear();
     g_seam_edge_count = 0;
@@ -200,11 +203,22 @@ int solve_abfpp(double* pos, int posLen, int* face, int faceLen) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-int solve_arap(double* pos, int posLen, int* face, int faceLen, int maxIter) {
+int solve_arap(double* pos, int posLen, int* face, int faceLen,
+               int maxIter, int boundaryShape, int weight) {
     dispose(); g_mesh = new Mesh();
     buildMeshFrom(pos, posLen, face, faceLen);
     if (g_mesh->boundaries.empty()) return -3;
-    ARAP arap(*g_mesh, maxIter > 0 ? maxIter : 30);
+
+    // Tutte 是 ARAP 的前置（初始化）步骤，不再是独立算法。
+    // boundaryShape: 0=CIRCLE(圆) 1=SQUARE(方) 2=FREE(自由)
+    // weight       : 0=COTAN(cot-Laplace) 1=UNIFORM(uniform)
+    const TutteBoundary initBoundary = (boundaryShape == 1) ? TutteBoundary::SQUARE
+                                     : (boundaryShape == 2) ? TutteBoundary::FREE
+                                     : TutteBoundary::CIRCLE;
+    const TutteWeight   initWeight   = (weight == 1) ? TutteWeight::UNIFORM
+                                     : TutteWeight::COTAN;
+
+    ARAP arap(*g_mesh, maxIter > 0 ? maxIter : 30, initBoundary, initWeight);
     auto t0 = std::chrono::steady_clock::now();
     arap.parameterize();
     recordTime(t0);
@@ -221,6 +235,9 @@ int solve_arap(double* pos, int posLen, int* face, int faceLen, int maxIter) {
         g_arap_iters.push_back(i < aHist.size() ? aHist[i] : 0.0);
         g_arap_iters.push_back(i < fHist.size() ? (double)fHist[i] : 0.0);
     }
+
+    // 拷出 Tutte 初始化 UV（与最终 UV 同坐标系）
+    g_arap_init_uv = arap.initialUv();
 
     if (!hasValidUvSpread()) return -2;
     extractUV();
@@ -349,6 +366,13 @@ EMSCRIPTEN_KEEPALIVE
 double* get_arap_iters() { return g_arap_iters.data(); }
 EMSCRIPTEN_KEEPALIVE
 int get_arap_iters_stride() { return ARAP_ITER_STRIDE; }
+
+// ---- ARAP 的 Tutte 初始化 UV ----
+// 扁平布局 [u0,v0,u1,v1,...]，长度 = 2 * 顶点数；与 get_uv_result() 同坐标系。
+EMSCRIPTEN_KEEPALIVE
+int get_arap_init_uv_size() { return (int)g_arap_init_uv.size(); }
+EMSCRIPTEN_KEEPALIVE
+double* get_arap_init_uv() { return g_arap_init_uv.data(); }
 
 // ---- 耗时 ----
 EMSCRIPTEN_KEEPALIVE

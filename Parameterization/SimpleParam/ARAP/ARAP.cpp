@@ -2,6 +2,7 @@
 #include "Tutte.h"
 #include <Eigen/SparseCholesky>
 #include <Eigen/SVD>
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -39,6 +40,43 @@ Eigen::Matrix2d rotationFromCovariance(const Eigen::Matrix2d& S)
     return R;
 }
 
+// 与 Parameterization::normalize() 完全相同的变换（面积重心 + 最大半径归一化），
+// 区别是该变换会**同时**作用到 Tutte 初始化快照 initUv 上，从而让
+// 「Tutte 初始 UV」与「ARAP 优化后 UV」处在同一坐标系、可以直接叠加对比。
+void normalizeMeshAndInit(Mesh& mesh, std::vector<double>& initUv)
+{
+    double totalArea = 0.0;
+    Eigen::Vector2d center = Eigen::Vector2d::Zero();
+    for (FaceCIter f = mesh.faces.begin(); f != mesh.faces.end(); f++) {
+        if (f->isBoundary()) continue;
+        const Eigen::Vector2d& a(f->he->vertex->uv);
+        const Eigen::Vector2d& b(f->he->next->vertex->uv);
+        const Eigen::Vector2d& c(f->he->next->next->vertex->uv);
+        const Eigen::Vector2d u = b - a;
+        const Eigen::Vector2d v = c - a;
+        const double area = 0.5 * (u.x() * v.y() - v.x() * u.y());
+        center += area * ((a + b + c) / 3.0);
+        totalArea += area;
+    }
+    if (std::abs(totalArea) > 0.0) center /= totalArea;
+
+    double r = 0.0;
+    for (VertexIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
+        v->uv -= center;
+        r = std::max(r, v->uv.squaredNorm());
+    }
+    r = std::sqrt(r);
+    if (r <= 0.0) return;
+    for (VertexIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
+        v->uv /= r;
+    }
+
+    for (size_t i = 0; i + 1 < initUv.size(); i += 2) {
+        initUv[i]     = (initUv[i]     - center.x()) / r;
+        initUv[i + 1] = (initUv[i + 1] - center.y()) / r;
+    }
+}
+
 void collectFaceCorners(FaceCIter f,
                         std::vector<Eigen::Vector3d>& pos3D,
                         std::vector<Eigen::Vector2d>& uvs,
@@ -58,8 +96,11 @@ void collectFaceCorners(FaceCIter f,
 
 } // namespace
 
-ARAP::ARAP(Mesh& mesh0, int maxIter)
-: Parameterization(mesh0), m_maxIter(maxIter) {}
+ARAP::ARAP(Mesh& mesh0, int maxIter, TutteBoundary boundaryShape, TutteWeight weight)
+: Parameterization(mesh0),
+  m_initBoundary(boundaryShape),
+  m_initWeight(weight),
+  m_maxIter(maxIter) {}
 
 void ARAP::computeLocalFrames()
 {
@@ -244,9 +285,19 @@ void ARAP::globalStep()
 
 void ARAP::initTutte()
 {
-    // ARAP always starts from harmonic map with circle boundary (cot-Laplace).
-    Tutte tutte(mesh, TutteBoundary::CIRCLE, TutteWeight::COTAN);
+    // ARAP 的前置步骤：Tutte（调和映射）初始化，边界形状/权重由构造参数决定。
+    // 关闭 Tutte 内部归一化以保留原始调和解——稍后与 ARAP 结果用同一变换归一化。
+    Tutte tutte(mesh, m_initBoundary, m_initWeight);
+    tutte.setNormalize(false);
     tutte.parameterize();
+
+    // 快照 Tutte 初始化 UV（扁平 2N），供页面展示「初始 / 优化后」对比
+    m_initUv.clear();
+    m_initUv.reserve(mesh.vertices.size() * 2);
+    for (VertexCIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
+        m_initUv.push_back(v->uv.x());
+        m_initUv.push_back(v->uv.y());
+    }
 }
 
 // 记录一条收敛指标。调用前 m_rotations 必须是当前 uv 的逐面最优旋转
@@ -341,5 +392,6 @@ void ARAP::parameterize()
         recordIteration();             // 迭代 iter + 1
     }
 
-    normalize();
+    // 归一化：网格 UV 与 Tutte 初始快照共用同一变换，保证两者处于同一坐标系
+    normalizeMeshAndInit(mesh, m_initUv);
 }

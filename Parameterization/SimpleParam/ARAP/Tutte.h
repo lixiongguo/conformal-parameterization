@@ -14,6 +14,11 @@ public:
     
     void parameterize() override;
 
+    // 关闭内部的 normalize()，保留原始调和解。
+    // 供 ARAP 这类上层算法使用：它需要把「Tutte 初始 UV」和「优化后 UV」用
+    // 同一个归一化变换放到同一坐标系里做对比（见 ARAP::parameterize）。
+    void setNormalize(bool enable) { m_normalize = enable; }
+
 private:
     // fix boundary vertices to circle or square
     void pinBoundary();
@@ -29,6 +34,7 @@ private:
     
     TutteBoundary m_shape;
     TutteWeight m_weight;
+    bool m_normalize = true;
 };
 
 #endif
