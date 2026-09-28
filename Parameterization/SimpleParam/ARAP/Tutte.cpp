@@ -24,6 +24,12 @@ void Tutte::pinBoundary()
 {
     std::vector<int> boundaryVerts;
     findBoundaryLoop(boundaryVerts);
+    // 边界环的半边以"洞"面为左侧，其 next 遍历方向与面绕序相反。若直接按收集顺序把
+    // 顶点钉在逆时针递增的圆周上，整张参数化会被镜像：UV 中所有面相对 3D 绕序反向
+    // （页面"翻转面"统计会给出 100%），且 ARAP 的逐面局部标架是按面绕序构造的保向
+    // 标架，与镜像的初始化冲突 —— local step 求出的"最优旋转"实际是反射，迭代会把
+    // 网格撕开/折叠。这里把边界环反转一次，使 UV 朝向与面绕序（以及 LSCM/SCP）一致。
+    std::reverse(boundaryVerts.begin(), boundaryVerts.end());
     int n = (int)boundaryVerts.size();
     if (n < 3) return;
     
