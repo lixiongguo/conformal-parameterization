@@ -249,6 +249,74 @@ void ARAP::initTutte()
     tutte.parameterize();
 }
 
+// 记录一条收敛指标。调用前 m_rotations 必须是当前 uv 的逐面最优旋转
+// （即刚跑完 localStep），此时能量是真正的 ARAP 能量 min_R E(u,R)。
+void ARAP::recordIteration()
+{
+    const int edges[3][2] = {{1, 2}, {2, 0}, {0, 1}};
+    const int opposite[3] = {0, 1, 2};
+
+    double energy = 0.0;
+    double sumAreaLocal = 0.0;
+    double sumAreaUv = 0.0;
+    int flipped = 0;
+
+    m_areaRatios.clear();
+
+    for (FaceCIter f = mesh.faces.begin(); f != mesh.faces.end(); f++) {
+        if (f->isBoundary()) continue;
+        const int fi = f->index;
+        if (m_localRefs[fi].size() != 3) continue;
+
+        std::vector<Eigen::Vector3d> pos3D;
+        std::vector<Eigen::Vector2d> uvs;
+        std::vector<int> vIdx;
+        collectFaceCorners(f, pos3D, uvs, vIdx);
+
+        const auto& x = m_localRefs[fi];
+        const Eigen::Matrix2d& R = m_rotations[fi];
+
+        // ARAP 能量：与 global step 目标函数完全同一个量
+        for (int e = 0; e < 3; e++) {
+            const int a = edges[e][0];
+            const int b = edges[e][1];
+            const int opp = opposite[e];
+            const double w = edgeWeight(pos3D[opp], pos3D[a], pos3D[b]);
+            const Eigen::Vector2d du = uvs[a] - uvs[b];
+            energy += w * (du - R * (x[a] - x[b])).squaredNorm();
+        }
+
+        // 面积畸变与翻面：局部标架 (x0,x1,x2) 恒为正向，故 UV 有向面积为负即折叠
+        const Eigen::Vector2d l1 = x[1] - x[0];
+        const Eigen::Vector2d l2 = x[2] - x[0];
+        const Eigen::Vector2d m1 = uvs[1] - uvs[0];
+        const Eigen::Vector2d m2 = uvs[2] - uvs[0];
+        const double areaLocal = 0.5 * (l1.x() * l2.y() - l2.x() * l1.y());
+        const double areaUv    = 0.5 * (m1.x() * m2.y() - m2.x() * m1.y());
+
+        if (areaUv < 0.0) flipped++;
+        if (areaLocal > 1e-12 && std::abs(areaUv) > 1e-15) {
+            sumAreaLocal += areaLocal;
+            sumAreaUv += std::abs(areaUv);
+            m_areaRatios.push_back(std::abs(areaUv) / areaLocal);
+        }
+    }
+
+    // 面积畸变：先扣掉 UV 的整体缩放（对参数化而言，整体缩放不是畸变），
+    // 再统计 mean|ln(r_i / r_global)|；完美等距（含等比例缩放）时为 0。
+    double areaDist = 0.0;
+    if (!m_areaRatios.empty() && sumAreaLocal > 1e-12 && sumAreaUv > 1e-15) {
+        const double rGlobal = sumAreaUv / sumAreaLocal;
+        double sum = 0.0;
+        for (double r : m_areaRatios) sum += std::abs(std::log(r / rGlobal));
+        areaDist = sum / (double)m_areaRatios.size();
+    }
+
+    m_iterEnergy.push_back(energy);
+    m_iterAreaDist.push_back(areaDist);
+    m_iterFlipped.push_back(flipped);
+}
+
 void ARAP::parameterize()
 {
     if (mesh.boundaries.empty()) return;
@@ -256,9 +324,21 @@ void ARAP::parameterize()
     computeLocalFrames();
     initTutte();
 
+    m_iterEnergy.clear();
+    m_iterAreaDist.clear();
+    m_iterFlipped.clear();
+
+    // 原循环是 localStep(); globalStep();。这里把 local 步提到度量之前：
+    //   localStep 只写 m_rotations、不改 uv，所以“先 local 后 global”与
+    //   “先 global 后 local”对 uv 的结果完全一致；但这样每轮迭代的 R_f 恰好就是
+    //   度量所需要的“当前 uv 的最优旋转”，统计不会额外增加 SVD 开销。
+    localStep();
+    recordIteration();                 // 迭代 0：Tutte 初始化状态（收益基线）
+
     for (int iter = 0; iter < m_maxIter; iter++) {
-        localStep();
         globalStep();
+        localStep();                   // 新 uv 的最优旋转，同时也供下一轮 global 使用
+        recordIteration();             // 迭代 iter + 1
     }
 
     normalize();

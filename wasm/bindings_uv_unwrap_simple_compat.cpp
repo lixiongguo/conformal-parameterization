@@ -24,6 +24,9 @@
 
 static Mesh*               g_mesh = nullptr;
 static std::vector<double> g_uv;
+// ARAP 逐次迭代收敛指标，每条 4 个 double：[迭代号, 能量, 面积畸变, 翻面数]
+static std::vector<double> g_arap_iters;
+static const int           ARAP_ITER_STRIDE = 4;
 static std::vector<double> g_gc;
 static double              g_last_time = 0.0;
 static std::vector<double> g_qc_errors;
@@ -85,6 +88,7 @@ EMSCRIPTEN_KEEPALIVE
 void dispose() {
     if (g_mesh) { delete g_mesh; g_mesh = nullptr; }
     g_uv.clear(); g_gc.clear(); g_qc_errors.clear(); g_qc_colors.clear();
+    g_arap_iters.clear();
     g_cones.clear(); g_cone_K.clear();
     g_seam_edge_count = 0;
     g_last_time = 0.0;
@@ -204,6 +208,20 @@ int solve_arap(double* pos, int posLen, int* face, int faceLen, int maxIter) {
     auto t0 = std::chrono::steady_clock::now();
     arap.parameterize();
     recordTime(t0);
+
+    // 拷出逐次迭代收敛指标（arap 是栈对象，用完即销毁）
+    const auto& eHist = arap.iterationEnergy();
+    const auto& aHist = arap.iterationAreaDistortion();
+    const auto& fHist = arap.iterationFlipped();
+    g_arap_iters.clear();
+    g_arap_iters.reserve(eHist.size() * ARAP_ITER_STRIDE);
+    for (size_t i = 0; i < eHist.size(); ++i) {
+        g_arap_iters.push_back((double)i);
+        g_arap_iters.push_back(eHist[i]);
+        g_arap_iters.push_back(i < aHist.size() ? aHist[i] : 0.0);
+        g_arap_iters.push_back(i < fHist.size() ? (double)fHist[i] : 0.0);
+    }
+
     if (!hasValidUvSpread()) return -2;
     extractUV();
     return 0;
@@ -322,6 +340,15 @@ EMSCRIPTEN_KEEPALIVE
 int get_uv_result_size() { return (int)g_uv.size(); }
 EMSCRIPTEN_KEEPALIVE
 double* get_uv_result() { return g_uv.data(); }
+
+// ---- ARAP 逐次迭代收敛指标 ----
+// 布局：[迭代号, 能量, 面积畸变, 翻面数] × N，N = maxIter + 1（含 Tutte 初始化基线）
+EMSCRIPTEN_KEEPALIVE
+int get_arap_iters_size() { return (int)g_arap_iters.size(); }
+EMSCRIPTEN_KEEPALIVE
+double* get_arap_iters() { return g_arap_iters.data(); }
+EMSCRIPTEN_KEEPALIVE
+int get_arap_iters_stride() { return ARAP_ITER_STRIDE; }
 
 // ---- 耗时 ----
 EMSCRIPTEN_KEEPALIVE
