@@ -30,8 +30,8 @@ std::string stringRep(const Eigen::Vector3d& v)
 
 void MeshIO::preallocateMeshElements(const MeshData& data, Mesh& mesh)
 {
-    // count the number of edges
-    std::set<std::pair<int,int>> edges;
+    // count the number of edges, and how many times each undirected edge is used
+    std::map<std::pair<int,int>, int> edgeUse;
     for (std::vector<std::vector<Index>>::const_iterator f  = data.indices.begin();
                                                          f != data.indices.end();
                                                          f ++) {
@@ -42,16 +42,24 @@ void MeshIO::preallocateMeshElements(const MeshData& data, Mesh& mesh)
             
             if (i > j) std::swap(i, j);
             
-            edges.insert(std::pair<int,int>(i, j));
+            edgeUse[std::pair<int,int>(i, j)]++;
         }
     }
     
     size_t nV = data.positions.size();
-    size_t nE = edges.size();
+    size_t nE = edgeUse.size();
     size_t nF = data.indices.size();
     size_t nHE = 2*nE;
-    size_t chi = nV - nE + nF;
-    int nB = std::max(0, 2 - (int)chi); // conservative approximation of number of boundary cycles
+    // One boundary face is inserted per boundary loop. Euler's 2-χ only matches
+    // a single genus-0 component; a mesh with several pieces (χ looks closed,
+    // but each piece still has a boundary) needs more. Each boundary edge belongs
+    // to some loop, so the boundary-edge count is a safe upper bound.
+    // Under-reserving faces reallocates the vector and dangling FaceIters left
+    // in halfedges make layout read garbage face indices.
+    int nBoundaryEdges = 0;
+    for (const auto& kv : edgeUse) {
+        if (kv.second == 1) nBoundaryEdges++;
+    }
     
     mesh.halfEdges.clear();
     mesh.vertices.clear();
@@ -62,7 +70,7 @@ void MeshIO::preallocateMeshElements(const MeshData& data, Mesh& mesh)
     mesh.halfEdges.reserve(nHE);
     mesh.vertices.reserve(nV);
     mesh.edges.reserve(nE);
-    mesh.faces.reserve(nF + nB);
+    mesh.faces.reserve(nF + nBoundaryEdges);
 }
 
 void MeshIO::indexElements(Mesh& mesh)

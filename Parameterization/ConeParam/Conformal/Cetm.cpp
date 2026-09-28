@@ -1,5 +1,6 @@
 #include "Cetm.h"
 #include "Clausen_integral.h"
+#include <algorithm>
 
 Cetm::Cetm(Mesh& mesh0, int optScheme0):
 ConeParameterization(mesh0),
@@ -235,30 +236,73 @@ void Cetm::performFaceLayout(HalfEdgeCIter he, const Eigen::Vector2d& dir,
 
 void Cetm::setUVs()
 {
-    // push any edge
-    std::stack<EdgeCIter> stack;
-    EdgeCIter e = mesh.edges.begin();
-    stack.push(e);
-    e->he->vertex->uv = Eigen::Vector2d::Zero();
-    e->he->next->vertex->uv = Eigen::Vector2d(lengths[e->index], 0);
-    
-    // perform layout
-    std::unordered_map<int, bool> visited;
-    while (!stack.empty()) {
-        EdgeCIter e = stack.top();
-        stack.pop();
-        
-        HalfEdgeCIter h1 = e->he;
-        HalfEdgeCIter h2 = h1->flip;
-        
-        // compute edge vector
-        Eigen::Vector2d dir = h2->vertex->uv - h1->vertex->uv;
-        dir.normalize();
-        
-        performFaceLayout(h1, dir, visited, stack);
-        performFaceLayout(h2, -dir, visited, stack);
+    for (VertexIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
+        v->uv.setZero();
     }
-    
+
+    // Lay out every connected piece. One seed edge misses the others, and the
+    // final normalize() then crushes the piece that was placed.
+    std::vector<char> placed(mesh.vertices.size(), 0);
+    std::unordered_map<int, bool> visited;
+    double cursor = 0.0;
+
+    for (FaceCIter f = mesh.faces.begin(); f != mesh.faces.end(); f++) {
+        if (f->isBoundary() || visited.find(f->index) != visited.end()) continue;
+
+        HalfEdgeCIter seedHe = f->he;
+        EdgeCIter seed = seedHe->edge;
+        if (lengths[seed->index] < 1e-15) {
+            visited[f->index] = true;
+            continue;
+        }
+        seedHe->vertex->uv = Eigen::Vector2d::Zero();
+        seedHe->next->vertex->uv = Eigen::Vector2d(lengths[seed->index], 0);
+
+        std::unordered_map<int, bool> visitedBefore = visited;
+        std::stack<EdgeCIter> stack;
+        stack.push(seed);
+        while (!stack.empty()) {
+            EdgeCIter e = stack.top();
+            stack.pop();
+
+            HalfEdgeCIter h1 = e->he;
+            HalfEdgeCIter h2 = h1->flip;
+
+            Eigen::Vector2d dir = h2->vertex->uv - h1->vertex->uv;
+            double dirLen = dir.norm();
+            if (dirLen < 1e-15) continue;
+            dir /= dirLen;
+
+            performFaceLayout(h1, dir, visited, stack);
+            performFaceLayout(h2, -dir, visited, stack);
+        }
+        if (visited.find(f->index) == visited.end()) visited[f->index] = true;
+
+        double minX = 1e300, maxX = -1e300;
+        std::vector<VertexIter> compVerts;
+        for (FaceCIter g = mesh.faces.begin(); g != mesh.faces.end(); g++) {
+            if (g->isBoundary()) continue;
+            if (visited.find(g->index) == visited.end()) continue;
+            if (visitedBefore.find(g->index) != visitedBefore.end()) continue;
+            HalfEdgeCIter he = g->he;
+            do {
+                if (!placed[he->vertex->index]) {
+                    placed[he->vertex->index] = 1;
+                    compVerts.push_back(he->vertex);
+                }
+                minX = std::min(minX, he->vertex->uv.x());
+                maxX = std::max(maxX, he->vertex->uv.x());
+                he = he->next;
+            } while (he != g->he);
+        }
+        if (compVerts.empty()) continue;
+
+        double shift = cursor - minX;
+        for (VertexIter v : compVerts) v->uv.x() += shift;
+        double width = std::max(maxX - minX, lengths[seed->index]);
+        cursor += width + 0.1 * width;
+    }
+
     normalize();
 }
 

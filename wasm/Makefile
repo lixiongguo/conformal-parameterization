@@ -171,9 +171,12 @@ build-page-all: build-simple-compat build-dgp-compat build-field-compat build-ab
 build-simple-compat: $(OUTPUT_DIR)/uv_unwrap_simple.js
 $(OUTPUT_DIR)/uv_unwrap_simple.js: bindings_uv_unwrap_simple_compat.cpp $(SIMPLE_COMPAT_SRCS)
 	@mkdir -p $(OUTPUT_DIR)
+	@rm -rf .build-simple-compat && mkdir -p .build-simple-compat
 	@echo "[Simple-Compat] Compiling..."
 	$(CXX) $(CXXFLAGS) $(SIMPLE_COMPAT_INC) bindings_uv_unwrap_simple_compat.cpp $(SIMPLE_COMPAT_SRCS) \
-	       -o $@ $(EM_FLAGS_COMPAT) -s EXPORT_NAME="UvUnwrapSimpleSolver"
+	       -o .build-simple-compat/uv_unwrap_simple.js $(EM_FLAGS_COMPAT) -s EXPORT_NAME="UvUnwrapSimpleSolver"
+	cp .build-simple-compat/uv_unwrap_simple.js .build-simple-compat/uv_unwrap_simple.wasm $(OUTPUT_DIR)/
+	@rm -rf .build-simple-compat
 	@echo "[Simple-Compat] Done → $@"
 
 # --- BD-LSCM (LSCM + Bounded Distortion, embind) ---
