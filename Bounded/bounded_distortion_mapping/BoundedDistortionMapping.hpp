@@ -80,6 +80,8 @@ std::vector<double> alignedFrameAngles(
     const Eigen::MatrixXi& faces,
     const Eigen::MatrixXd& uv);
 
+// vertices: n×2 平面静止坐标，或 n×3 曲面顶点（按三角形局部标架，与 LSCM 相同）。
+// 有界失真用固定帧上的 L∞ 锥，增广拉格朗日 + 稀疏牛顿；迭代次数有硬上限，避免梯度下降把主线程卡死。
 SolveResult solveBoundedDistortionMap(
     const Eigen::MatrixXd& vertices,
     const Eigen::MatrixXi& faces,

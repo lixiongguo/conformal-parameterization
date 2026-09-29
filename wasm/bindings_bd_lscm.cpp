@@ -132,17 +132,26 @@ static BDLscmResult _solveBDLscmFull(
         return v;
     };
 
-    std::vector<double> v2D = vecDbl(vertices2D_js);
+    std::vector<double> vPos = vecDbl(vertices2D_js);
     std::vector<int>    fi  = vecInt(faces_js);
     std::vector<double> uv0 = vecDbl(initial_uv_js);
     std::vector<int>    av  = vecInt(anchor_vertices_js);
     std::vector<double> at  = vecDbl(anchor_targets_js);
 
-    const int nV = static_cast<int>(v2D.size() / 2);
+    if (uv0.size() % 2 != 0 || uv0.empty()) {
+        throw bounded_distortion::BoundedDistortionError("initial uv length must be 2 * vertex count");
+    }
+    const int nV = static_cast<int>(uv0.size() / 2);
     const int nF = static_cast<int>(fi.size() / 3);
+    int dim = 0;
+    if (static_cast<int>(vPos.size()) == nV * 3) dim = 3;
+    else if (static_cast<int>(vPos.size()) == nV * 2) dim = 2;
+    else {
+        throw bounded_distortion::BoundedDistortionError("vertex array length must be 2*n or 3*n");
+    }
 
-    // 构建 Eigen 矩阵
-    Eigen::MatrixXd vertices = _vecToMatrixXd(v2D, nV, 2);
+    // 构建 Eigen 矩阵。曲面展开传 n×3，平面变形传 n×2。
+    Eigen::MatrixXd vertices = _vecToMatrixXd(vPos, nV, dim);
     Eigen::MatrixXi faces    = _vecToMatrixXi(fi, nF, 3);
     Eigen::MatrixXd init_uv  = _vecToMatrixXd(uv0, nV, 2);
 
@@ -209,16 +218,22 @@ static BDLscmResult _runOnMesh(
     const std::vector<double>& anchor_targets,
     double distortion_bound)
 {
-    // 提取网格数据
+    // 提取网格数据。position 是三维，按曲面局部标架计算，不能只取 xy。
     std::vector<double> uv_flat  = _vertexUvs(mesh);
-    std::vector<double> pos2D    = _vertexPositions2D(mesh);
+    std::vector<double> pos3D;
+    pos3D.reserve(mesh.vertices.size() * 3);
+    for (VertexCIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
+        pos3D.push_back(v->position.x());
+        pos3D.push_back(v->position.y());
+        pos3D.push_back(v->position.z());
+    }
     std::vector<int>    faces    = _faceIndices(mesh);
 
     bounded_distortion::Options opts;
     opts.distortion_bound   = distortion_bound;
     opts.lscm_weight        = 1.0;
-    opts.outer_iterations   = 8;
-    opts.inner_iterations   = 400;
+    opts.outer_iterations   = 4;
+    opts.inner_iterations   = 4;
     opts.distortion_penalty = 5000.0;
     opts.positivity_penalty = 5000.0;
     opts.initial_step       = 1e-2;
@@ -236,7 +251,7 @@ static BDLscmResult _runOnMesh(
 
     // 构建 Eigen 矩阵
     int nV = (int)mesh.vertices.size(), nF = (int)mesh.faces.size();
-    Eigen::MatrixXd V = _vecToMatrixXd(pos2D, nV, 2);
+    Eigen::MatrixXd V = _vecToMatrixXd(pos3D, nV, 3);
     Eigen::MatrixXi F = _vecToMatrixXi(faces, nF, 3);
     Eigen::MatrixXd UV0 = _vecToMatrixXd(uv_flat, nV, 2);
 
