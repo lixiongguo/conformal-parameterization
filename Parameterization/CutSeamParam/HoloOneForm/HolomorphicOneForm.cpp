@@ -289,7 +289,8 @@ bool HolomorphicOneForm::solveHarmonic1Form(Eigen::VectorXd& omega)
     if (row == 0 || nE == 0) return false;
 
     // Avoid forming A^T A for very large meshes (WASM memory limit).
-    if (nE > 8000) return false;
+    // 与 AbelJacobi 的上限对齐(12000)：允许 torus/double-torus/3holes 等中等网格。
+    if (nE > 12000) return false;
 
     SparseMatrix<double> A(row, nE);
     A.setFromTriplets(trips.begin(), trips.end());
