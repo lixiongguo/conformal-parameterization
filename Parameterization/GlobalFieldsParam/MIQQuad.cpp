@@ -222,6 +222,22 @@ void MIQQuad::buildTargetDirs()
     }
 }
 
+void MIQQuad::exportCrossAnalysis(std::vector<int>& edges, std::vector<int>& singulars)
+{
+    countSingularities();
+    edges.clear();
+    edges.reserve(static_cast<size_t>(nE) * 3);
+    for (int ei = 0; ei < nE; ++ei) {
+        const Edge& e = edgeList[ei];
+        if (e.f2 < 0) continue;
+        const int j = (ei < jump.size()) ? jump(ei) : 0;
+        edges.push_back(e.v1);
+        edges.push_back(e.v2);
+        edges.push_back(j);
+    }
+    singulars.assign(singularVerts_.begin(), singularVerts_.end());
+}
+
 void MIQQuad::buildCotLaplacian(SparseMatrix<double>& L)
 {
     L.resize(nV, nV);
@@ -388,7 +404,8 @@ int MIQQuad::countSingularities()
         }
 
         double I = I0 + 0.25 * jSum;
-        if (std::fabs(I) > 1e-6)
+        const double q = std::round(I * 4.0) / 4.0;
+        if (std::fabs(q) >= 0.25 && std::fabs(I - q) < 0.05)
             singularVerts_.push_back(v);
     }
     return static_cast<int>(singularVerts_.size());

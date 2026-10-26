@@ -47,6 +47,11 @@ public:
 
     const Eigen::VectorXi& edgeJumps() const { return jump; }
 
+    void ensureTargetDirs() { buildTargetDirs(); }
+    const Eigen::MatrixXd& faceDir1() const { return faceD1; }
+    const Eigen::MatrixXd& faceDir2() const { return faceD2; }
+    void exportCrossAnalysis(std::vector<int>& edges, std::vector<int>& singulars);
+
     // Per-face corner UV in the seamless chart, before averaging seam copies.
     const Eigen::MatrixXd& cornerUV() const { return cornerUV_; }
 

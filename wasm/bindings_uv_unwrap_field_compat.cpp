@@ -57,6 +57,9 @@ std::vector<double> g_face_theta;
 std::vector<int> g_edge_jumps;
 std::vector<double> g_uv;
 std::vector<double> g_corner_uv;
+std::vector<double> g_cross_preview;
+std::vector<int> g_cross_edges;
+std::vector<int> g_singular_verts;
 double g_last_time_ms = 0.0;
 double g_last_miq_energy = 0.0;
 std::vector<std::string> g_stage_names;
@@ -423,6 +426,55 @@ int field_run_stage(int index)
     if (!g_qc) return -1;
     return g_qc->pipelineRunStage(index);
 }
+
+EMSCRIPTEN_KEEPALIVE
+int field_capture_cross()
+{
+    if (!g_miq) return -1;
+    g_miq->ensureTargetDirs();
+    const int nF = g_miq->numFaces();
+    const Eigen::MatrixXd& d1 = g_miq->faceDir1();
+    const Eigen::MatrixXd& d2 = g_miq->faceDir2();
+    if (d1.rows() != nF || d2.rows() != nF || d1.cols() < 3 || d2.cols() < 3) return -1;
+    g_cross_preview.resize(static_cast<size_t>(nF) * 6);
+    for (int fi = 0; fi < nF; ++fi) {
+        g_cross_preview[static_cast<size_t>(fi) * 6] = d1(fi, 0);
+        g_cross_preview[static_cast<size_t>(fi) * 6 + 1] = d1(fi, 1);
+        g_cross_preview[static_cast<size_t>(fi) * 6 + 2] = d1(fi, 2);
+        g_cross_preview[static_cast<size_t>(fi) * 6 + 3] = d2(fi, 0);
+        g_cross_preview[static_cast<size_t>(fi) * 6 + 4] = d2(fi, 1);
+        g_cross_preview[static_cast<size_t>(fi) * 6 + 5] = d2(fi, 2);
+    }
+    g_miq->exportCrossAnalysis(g_cross_edges, g_singular_verts);
+    return nF;
+}
+
+EMSCRIPTEN_KEEPALIVE
+double* get_cross_preview()
+{
+    return g_cross_preview.empty() ? nullptr : g_cross_preview.data();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int get_cross_preview_size() { return static_cast<int>(g_cross_preview.size()); }
+
+EMSCRIPTEN_KEEPALIVE
+int* get_cross_edges()
+{
+    return g_cross_edges.empty() ? nullptr : g_cross_edges.data();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int get_cross_edge_count() { return static_cast<int>(g_cross_edges.size() / 3); }
+
+EMSCRIPTEN_KEEPALIVE
+int* get_singular_verts()
+{
+    return g_singular_verts.empty() ? nullptr : g_singular_verts.data();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int get_singular_count() { return static_cast<int>(g_singular_verts.size()); }
 
 EMSCRIPTEN_KEEPALIVE
 int field_recorded_count()
