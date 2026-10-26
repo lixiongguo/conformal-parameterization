@@ -1,4 +1,5 @@
 #include "MIQQuad.h"
+#include <Eigen/SparseLU>
 #include <cmath>
 #include <map>
 #include <queue>
@@ -743,6 +744,8 @@ bool MIQQuad::solveSeamlessParam()
         VectorXd cv = solver.solve(div2);
         if (solver.info() != Success) return false;
 
+        captureCornerUV(cu, cv);
+
         // project back to base mesh
         UV.resize(nV, 2);
         UV.setZero();
@@ -900,7 +903,8 @@ bool MIQQuad::solveSeamlessParam()
         rhs(2 * M + nCuts + ci)    = cutTy(ci) - muV(ci);
     }
 
-    SimplicialLDLT<SparseMatrix<double>> kktSolver;
+    // Saddle-point KKT is symmetric indefinite; SimplicialLDLT rejects it.
+    SparseLU<SparseMatrix<double>> kktSolver;
     kktSolver.compute(KKTmat);
     if (kktSolver.info() != Success) return false;
     VectorXd sol = kktSolver.solve(rhs);
@@ -908,6 +912,8 @@ bool MIQQuad::solveSeamlessParam()
 
     VectorXd cu = cuTilde + sol.head(M);
     VectorXd cv = cvTilde + sol.segment(M, M);
+
+    captureCornerUV(cu, cv);
 
     // --- project back to base mesh ---
     UV.resize(nV, 2);
@@ -931,23 +937,56 @@ bool MIQQuad::solveSeamlessParam()
     return true;
 }
 
+void MIQQuad::captureCornerUV(const VectorXd& cu, const VectorXd& cv)
+{
+    cornerUV_.resize(nF, 6);
+    cornerUV_.setConstant(std::numeric_limits<double>::quiet_NaN());
+    for (int fi = 0; fi < nF; ++fi) {
+        const int i0 = cutFaces[fi * 3];
+        const int i1 = cutFaces[fi * 3 + 1];
+        const int i2 = cutFaces[fi * 3 + 2];
+        if (i0 < 0 || i1 < 0 || i2 < 0) continue;
+        if (i0 >= cu.size() || i1 >= cu.size() || i2 >= cu.size()) continue;
+        cornerUV_(fi, 0) = cu(i0); cornerUV_(fi, 1) = cv(i0);
+        cornerUV_(fi, 2) = cu(i1); cornerUV_(fi, 3) = cv(i1);
+        cornerUV_(fi, 4) = cu(i2); cornerUV_(fi, 5) = cv(i2);
+    }
+}
+
+void MIQQuad::captureVertexCornerUV()
+{
+    cornerUV_.resize(nF, 6);
+    cornerUV_.setConstant(std::numeric_limits<double>::quiet_NaN());
+    if (UV.rows() < nV || UV.cols() < 2) return;
+    for (int fi = 0; fi < nF; ++fi) {
+        for (int k = 0; k < 3; ++k) {
+            const int v = faces[fi * 3 + k];
+            if (v < 0 || v >= nV) continue;
+            cornerUV_(fi, k * 2) = UV(v, 0);
+            cornerUV_(fi, k * 2 + 1) = UV(v, 1);
+        }
+    }
+}
+
 void MIQQuad::parameterize()
 {
+    cornerUV_.resize(0, 6);
     if (!initMeshData()) return;
 
     initCrossField();
     if (!solveCrossFieldIP()) return;
     buildTargetDirs();
 
-    // Phase 2: seamless parameterization with cut graph
+    // Phase 2: seamless parameterization with cut graph.
+    // Corner UV stays in the integer chart. Vertex UV is the averaged copy used elsewhere.
     if (solveSeamlessParam()) {
         for (VertexIter v = mesh.vertices.begin(); v != mesh.vertices.end(); ++v) {
             v->uv = Vector2d(UV(v->index, 0), UV(v->index, 1));
         }
         normalize();
     } else {
-        // Fallback: plain Poisson (existing behaviour)
         solvePoisson();
+        captureVertexCornerUV();
         for (VertexIter v = mesh.vertices.begin(); v != mesh.vertices.end(); ++v) {
             v->uv = Vector2d(UV(v->index, 0), UV(v->index, 1));
         }

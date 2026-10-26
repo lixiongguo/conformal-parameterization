@@ -55,6 +55,7 @@ std::vector<int> g_matching;
 std::vector<double> g_face_theta;
 std::vector<int> g_edge_jumps;
 std::vector<double> g_uv;
+std::vector<double> g_corner_uv;
 double g_last_time_ms = 0.0;
 double g_last_miq_energy = 0.0;
 
@@ -78,6 +79,7 @@ bool loadMeshFromArrays(const double* positions, int posLen, const int* faces, i
     g_face_theta.clear();
     g_edge_jumps.clear();
     g_uv.clear();
+    g_corner_uv.clear();
     g_last_miq_energy = 0.0;
 
     if (!positions || !faces) return false;
@@ -178,6 +180,20 @@ void snapshotUV()
         g_uv[static_cast<size_t>(vi) * 2 + 1] = g_mesh->vertices[vi].uv[1];
     }
 }
+
+void snapshotCornerUV()
+{
+    g_corner_uv.clear();
+    if (!g_miq) return;
+    const Eigen::MatrixXd& corners = g_miq->cornerUV();
+    if (corners.rows() <= 0 || corners.cols() < 6) return;
+    g_corner_uv.resize(static_cast<size_t>(corners.rows()) * 6);
+    for (int fi = 0; fi < corners.rows(); ++fi) {
+        for (int k = 0; k < 6; ++k) {
+            g_corner_uv[static_cast<size_t>(fi) * 6 + k] = corners(fi, k);
+        }
+    }
+}
 bool hasValidUvSpread()
 {
     if (!g_mesh || g_mesh->vertices.empty()) return false;
@@ -259,6 +275,7 @@ int solve_miq(int crossIters, int jumpRefinePasses)
 
     snapshotMIQFields();
     snapshotUV();
+    snapshotCornerUV();
     return 0;
 }
 
@@ -325,6 +342,12 @@ EMSCRIPTEN_KEEPALIVE
 int get_uv_result_size() { return static_cast<int>(g_uv.size()); }
 
 EMSCRIPTEN_KEEPALIVE
+double* get_corner_uv() { return g_corner_uv.empty() ? nullptr : g_corner_uv.data(); }
+
+EMSCRIPTEN_KEEPALIVE
+int get_corner_uv_size() { return static_cast<int>(g_corner_uv.size()); }
+
+EMSCRIPTEN_KEEPALIVE
 void dispose()
 {
     g_face_dirs.clear();
@@ -332,6 +355,7 @@ void dispose()
     g_face_theta.clear();
     g_edge_jumps.clear();
     g_uv.clear();
+    g_corner_uv.clear();
     g_last_time_ms = 0.0;
     g_last_miq_energy = 0.0;
     g_qc_inited = false;

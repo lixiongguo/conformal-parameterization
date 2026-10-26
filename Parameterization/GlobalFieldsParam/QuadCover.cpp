@@ -172,6 +172,9 @@ void QuadCover::computeVertexNormals() {
 }
 
 void QuadCover::estimatePrincipalCurvature() {
+    if (vertexNormals.rows() != nVerts || vertexNormals.cols() != 3)
+        computeVertexNormals();
+
     faceNormals.resize(nFaces, 3);
     faceDirs_.resize(nFaces, 3);
 

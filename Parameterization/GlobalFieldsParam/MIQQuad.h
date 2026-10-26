@@ -37,6 +37,9 @@ public:
 
     const Eigen::VectorXi& edgeJumps() const { return jump; }
 
+    // Per-face corner UV in the seamless chart, before averaging seam copies.
+    const Eigen::MatrixXd& cornerUV() const { return cornerUV_; }
+
     double crossFieldEnergy() const;
 
 protected:
@@ -66,6 +69,8 @@ protected:
     bool buildCutMesh();
     void determineCutRotations();
     bool solveSeamlessParam();
+    void captureCornerUV(const Eigen::VectorXd& cu, const Eigen::VectorXd& cv);
+    void captureVertexCornerUV();
     void buildCotLaplacianCut(Eigen::SparseMatrix<double>& L) const;
     int  findSharedEdge(int f1, int f2) const;
     int  countSingularities();
@@ -90,6 +95,7 @@ protected:
     Eigen::MatrixXd faceD1;
     Eigen::MatrixXd faceD2;
     Eigen::MatrixXd UV;
+    Eigen::MatrixXd cornerUV_;
 
     int crossIters_ = 12;
     int jumpRefinePasses_ = 2;
