@@ -970,26 +970,75 @@ void MIQQuad::captureVertexCornerUV()
 
 void MIQQuad::parameterize()
 {
+    stageTimes_.clear();
+    StageClock clock(stageTimes_);
     cornerUV_.resize(0, 6);
-    if (!initMeshData()) return;
+    if (!clock.run("网格准备", [&] { return initMeshData(); })) return;
 
-    initCrossField();
-    if (!solveCrossFieldIP()) return;
-    buildTargetDirs();
+    clock.lap("初始交叉场", [&] { initCrossField(); });
+    if (!clock.run("混合整数求解", [&] { return solveCrossFieldIP(); })) return;
+    clock.lap("目标方向", [&] { buildTargetDirs(); });
 
-    // Phase 2: seamless parameterization with cut graph.
-    // Corner UV stays in the integer chart. Vertex UV is the averaged copy used elsewhere.
-    if (solveSeamlessParam()) {
+    bool seamless = false;
+    clock.run("无缝参数化", [&] { seamless = solveSeamlessParam(); return true; });
+    if (!seamless) {
+        clock.lap("泊松回退", [&] {
+            solvePoisson();
+            captureVertexCornerUV();
+        });
+    }
+    clock.lap("写入坐标", [&] {
         for (VertexIter v = mesh.vertices.begin(); v != mesh.vertices.end(); ++v) {
             v->uv = Vector2d(UV(v->index, 0), UV(v->index, 1));
         }
         normalize();
-    } else {
-        solvePoisson();
-        captureVertexCornerUV();
-        for (VertexIter v = mesh.vertices.begin(); v != mesh.vertices.end(); ++v) {
-            v->uv = Vector2d(UV(v->index, 0), UV(v->index, 1));
-        }
-        normalize();
+    });
+}
+
+void MIQQuad::pipelineReset() {
+    stageTimes_.clear();
+    pipelineSeamless_ = false;
+    cornerUV_.resize(0, 6);
+}
+
+const char* MIQQuad::pipelineStageName(int index) const {
+    static const char* names[] = {
+        "网格准备", "初始交叉场", "混合整数求解", "目标方向",
+        "无缝参数化", "泊松回退", "写入坐标"
+    };
+    if (index < 0 || index >= 7) return "";
+    return names[index];
+}
+
+int MIQQuad::pipelineRunStage(int index) {
+    StageClock clock(stageTimes_);
+    switch (index) {
+    case 0:
+        cornerUV_.resize(0, 6);
+        return clock.run("网格准备", [&] { return initMeshData(); }) ? 0 : -1;
+    case 1:
+        clock.lap("初始交叉场", [&] { initCrossField(); });
+        return 0;
+    case 2:
+        return clock.run("混合整数求解", [&] { return solveCrossFieldIP(); }) ? 0 : -1;
+    case 3:
+        clock.lap("目标方向", [&] { buildTargetDirs(); });
+        return 0;
+    case 4:
+        clock.run("无缝参数化", [&] { pipelineSeamless_ = solveSeamlessParam(); return true; });
+        return 0;
+    case 5:
+        if (pipelineSeamless_) return 2;
+        clock.lap("泊松回退", [&] { solvePoisson(); captureVertexCornerUV(); });
+        return 0;
+    case 6:
+        clock.lap("写入坐标", [&] {
+            for (VertexIter v = mesh.vertices.begin(); v != mesh.vertices.end(); ++v)
+                v->uv = Vector2d(UV(v->index, 0), UV(v->index, 1));
+            normalize();
+        });
+        return 0;
+    default:
+        return -1;
     }
 }

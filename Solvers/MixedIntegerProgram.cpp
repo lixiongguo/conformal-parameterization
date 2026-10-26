@@ -1,4 +1,5 @@
 #include "MixedIntegerProgram.h"
+#include "ProgressReport.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -90,7 +91,8 @@ bool MixedIntegerProgram::solveVariablesGivenIntegers(
     return variableSolver_.info() == Success && outVariables.size() == nVars_;
 }
 
-bool MixedIntegerProgram::optimizeAlternating(VectorXd& variables, VectorXi& integers)
+bool MixedIntegerProgram::optimizeAlternating(VectorXd& variables, VectorXi& integers,
+                                              int budget, int total)
 {
     buildNormalMatrix(normalMatrix_);
     variableSolverReady_ = false;
@@ -115,21 +117,29 @@ bool MixedIntegerProgram::optimizeAlternating(VectorXd& variables, VectorXi& int
 
         const double change = (newVariables - variables).norm();
         variables = newVariables;
+        progressReport(std::min(iter + 1, budget), total);
         if (change < 1e-6) break;
     }
 
     return true;
 }
 
-void MixedIntegerProgram::refineIntegersCoordinateDescent(VectorXd& variables, VectorXi& integers)
+void MixedIntegerProgram::refineIntegersCoordinateDescent(VectorXd& variables, VectorXi& integers,
+                                                          int doneBase, int total)
 {
     VectorXd trialVariables(nVars_);
+    const int n = nConstraints_;
 
     for (int pass = 0; pass < refinePasses_; ++pass) {
         bool improved = false;
+        int index = 0;
 
         for (const auto& c : constraints_) {
-            if (c.i < 0 || c.j < 0) continue;
+            ++index;
+            if (c.i < 0 || c.j < 0) {
+                progressReport(doneBase + pass * n + index, total);
+                continue;
+            }
 
             const int saved = integers(c.idx);
             int bestZ = saved;
@@ -147,6 +157,7 @@ void MixedIntegerProgram::refineIntegersCoordinateDescent(VectorXd& variables, V
 
             integers(c.idx) = bestZ;
             if (bestZ != saved) improved = true;
+            progressReport(doneBase + pass * n + index, total);
         }
 
         solveVariablesGivenIntegers(integers, variables);
@@ -163,7 +174,13 @@ bool MixedIntegerProgram::solve(VectorXd& variables, VectorXi& integers)
         integers.setZero();
     }
 
-    if (!optimizeAlternating(variables, integers)) return false;
-    refineIntegersCoordinateDescent(variables, integers);
+    const int altBudget = std::max(0, alternatingIters_);
+    const int refineBudget = std::max(0, refinePasses_) * nConstraints_;
+    const int total = std::max(1, altBudget + refineBudget);
+    progressReset();
+    progressReport(0, total);
+    if (!optimizeAlternating(variables, integers, altBudget, total)) return false;
+    refineIntegersCoordinateDescent(variables, integers, altBudget, total);
+    progressReport(total, total);
     return true;
 }

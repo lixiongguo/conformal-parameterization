@@ -6,6 +6,8 @@
 
 #include "MixedIntegerProgram.h"
 
+#include "../../QuadMeshing/StageLog.h"
+
 #include <Eigen/SparseCholesky>
 #include <memory>
 
@@ -22,6 +24,14 @@ public:
     MIQQuad(Mesh& mesh0);
 
     void parameterize() override;
+
+    const std::vector<StageTime>& stageTimes() const { return stageTimes_; }
+
+    void pipelineReset();
+    int pipelineStageCount() const { return 7; }
+    const char* pipelineStageName(int index) const;
+    /** 0 = ok, 2 = skipped, -1 = failed. */
+    int pipelineRunStage(int index);
 
     void setCrossFieldIterations(int iters) { crossIters_ = iters; }
 
@@ -119,6 +129,8 @@ protected:
 
     // Integer translations per cut edge  (× 2 components)
     Eigen::VectorXi    cutTx, cutTy;
+    std::vector<StageTime> stageTimes_;
+    bool pipelineSeamless_ = false;
 };
 
 #endif

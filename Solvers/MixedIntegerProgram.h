@@ -48,8 +48,10 @@ private:
     bool solveVariablesGivenIntegers(
         const Eigen::VectorXi& integers,
         Eigen::VectorXd& outVariables) const;
-    bool optimizeAlternating(Eigen::VectorXd& variables, Eigen::VectorXi& integers);
-    void refineIntegersCoordinateDescent(Eigen::VectorXd& variables, Eigen::VectorXi& integers);
+    bool optimizeAlternating(Eigen::VectorXd& variables, Eigen::VectorXi& integers,
+                             int budget, int total);
+    void refineIntegersCoordinateDescent(Eigen::VectorXd& variables, Eigen::VectorXi& integers,
+                                         int doneBase, int total);
 
     static int roundToInt(double x);
 

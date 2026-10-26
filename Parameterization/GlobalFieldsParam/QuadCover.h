@@ -5,6 +5,8 @@
 #include <Eigen/SparseCholesky>
 #include <vector>
 
+#include "../../QuadMeshing/StageLog.h"
+
 /**
  * QuadCover: Global seamless quad parameterization via branch covering.
  *
@@ -32,6 +34,14 @@ public:
     void parameterize() override;
     bool parameterizeFull();
 
+    void pipelineReset();
+    int pipelineStageCount() const { return 11; }
+    const char* pipelineStageName(int index) const;
+    /** 0 = ok, -1 = this stage failed. */
+    int pipelineRunStage(int index);
+
+    const std::vector<StageTime>& stageTimes() const { return stageTimes_; }
+
     /** Per-face reference direction of the input cross field (rows = faces, cols = 3). */
     void setCrossField(const Eigen::MatrixXd& dirs) override;
     void setSmoothIterations(int iters);
@@ -57,8 +67,9 @@ protected:
         int nCoverFaces = 0;
     };
 
+    bool timedParameterize();
     bool initMeshData();
-    bool runFullPipeline();
+    bool runFullPipeline(StageClock& clock);
 
     void computeVertexNormals();
     void estimatePrincipalCurvature();
@@ -130,11 +141,14 @@ protected:
 
     std::vector<Edge> edgeList;
     std::vector<CutPath> cutPaths;
+    CoverData pipelineCover_;
+    bool pipelineFailed_ = false;
     Eigen::VectorXd muU;
     Eigen::VectorXd muV;
 
     int smoothIters;
     bool requirePureQuads;
+    std::vector<StageTime> stageTimes_;
 };
 
 #endif

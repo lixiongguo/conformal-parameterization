@@ -235,6 +235,15 @@ $(OUTPUT_DIR)/ruppert.js: bindings_ruppert_compat.cpp
 	       -o $@ $(EM_FLAGS_COMPAT) -s EXPORT_NAME="RuppertModule"
 	@echo "[Ruppert] Done → $@"
 
+# --- Naive triangle pairing (render test, no field solve) ---
+build-naive-quad: $(OUTPUT_DIR)/naive_quad.js
+$(OUTPUT_DIR)/naive_quad.js: bindings_naive_quad.cpp ../QuadMeshing/NaiveQuadMerge.cpp ../QuadMeshing/NaiveQuadMerge.h
+	@mkdir -p $(OUTPUT_DIR)
+	@echo "[NaiveQuad] Compiling..."
+	$(CXX) $(CXXFLAGS) -I../QuadMeshing bindings_naive_quad.cpp ../QuadMeshing/NaiveQuadMerge.cpp \
+	       -o $@ $(EM_FLAGS_COMPAT) -s EXPORT_NAME="NaiveQuadMerge"
+	@echo "[NaiveQuad] Done → $@"
+
 # --- BD-HM (Bounded Distortion Harmonic Map) ---
 build-bdhm: $(OUTPUT_DIR)/bdhm.js
 $(OUTPUT_DIR)/bdhm.js: bindings_bdhm.cpp $(BDHM_SRCS)
@@ -299,6 +308,7 @@ help:
 	@echo "  make build-abel-compat     Build uv_unwrap_abel_jacobi compat"
 	@echo "  make build-page-all        Build 5 frontend compat packages"
 	@echo "  make build-bdhm            Build BD-HM module (Bounded Distortion Harmonic Map)"
+	@echo "  make build-naive-quad      Build naive triangle-to-quad merge"
 	@echo "  make build-all             Build all modules"
 	@echo "  make clean                 Remove outputs"
 	@echo "  make check                 Verify toolchain"

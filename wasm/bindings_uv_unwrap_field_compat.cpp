@@ -18,6 +18,7 @@
 #include "QuadCover.h"
 #include "MIQQuad.h"
 #include "HolomorphicOneForm.h"
+#include "ProgressReport.h"
 
 namespace {
 
@@ -58,6 +59,19 @@ std::vector<double> g_uv;
 std::vector<double> g_corner_uv;
 double g_last_time_ms = 0.0;
 double g_last_miq_energy = 0.0;
+std::vector<std::string> g_stage_names;
+std::vector<double> g_stage_ms;
+int g_pipeline_algo = 0;
+
+void publishStages(const std::vector<StageTime>& stages)
+{
+    g_stage_names.clear();
+    g_stage_ms.clear();
+    for (const StageTime& stage : stages) {
+        g_stage_names.push_back(stage.name);
+        g_stage_ms.push_back(stage.ms);
+    }
+}
 
 bool loadMeshFromArrays(const double* positions, int posLen, const int* faces, int faceLen)
 {
@@ -253,6 +267,7 @@ int step3_solve_quadcover(int full)
         ok = true;
     }
     g_last_time_ms = emscripten_get_now() - t0;
+    publishStages(g_qc->stageTimes());
     if (!ok) return -2;
     snapshotUV();
     return 0;
@@ -276,6 +291,7 @@ int solve_miq(int crossIters, int jumpRefinePasses)
     snapshotMIQFields();
     snapshotUV();
     snapshotCornerUV();
+    publishStages(g_miq->stageTimes());
     return 0;
 }
 
@@ -346,6 +362,101 @@ double* get_corner_uv() { return g_corner_uv.empty() ? nullptr : g_corner_uv.dat
 
 EMSCRIPTEN_KEEPALIVE
 int get_corner_uv_size() { return static_cast<int>(g_corner_uv.size()); }
+
+EMSCRIPTEN_KEEPALIVE
+int get_stage_count() { return static_cast<int>(g_stage_names.size()); }
+
+EMSCRIPTEN_KEEPALIVE
+const char* get_stage_name(int index) {
+    if (index < 0 || index >= static_cast<int>(g_stage_names.size())) return "";
+    return g_stage_names[static_cast<size_t>(index)].c_str();
+}
+
+EMSCRIPTEN_KEEPALIVE
+double get_stage_ms(int index) {
+    if (index < 0 || index >= static_cast<int>(g_stage_ms.size())) return 0;
+    return g_stage_ms[static_cast<size_t>(index)];
+}
+
+static void wasmProgressHook(int done, int total)
+{
+    EM_ASM({
+        if (typeof postMessage === "function") {
+            postMessage({ type: "progress", done: $0, total: $1 });
+        }
+    }, done, total);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int field_prepare(int algo)
+{
+    progressHook() = wasmProgressHook;
+    g_pipeline_algo = algo;
+    if (algo == 0) {
+        if (!g_mesh || !g_miq) return -1;
+        g_miq->pipelineReset();
+        return g_miq->pipelineStageCount();
+    }
+    if (!g_mesh || !g_qc) return -1;
+    g_qc->pipelineReset();
+    return g_qc->pipelineStageCount();
+}
+
+EMSCRIPTEN_KEEPALIVE
+const char* field_stage_name(int index)
+{
+    if (g_pipeline_algo == 0) {
+        if (!g_miq) return "";
+        return g_miq->pipelineStageName(index);
+    }
+    if (!g_qc) return "";
+    return g_qc->pipelineStageName(index);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int field_run_stage(int index)
+{
+    if (g_pipeline_algo == 0) {
+        if (!g_miq) return -1;
+        return g_miq->pipelineRunStage(index);
+    }
+    if (!g_qc) return -1;
+    return g_qc->pipelineRunStage(index);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int field_recorded_count()
+{
+    if (g_pipeline_algo == 0) return g_miq ? static_cast<int>(g_miq->stageTimes().size()) : 0;
+    return g_qc ? static_cast<int>(g_qc->stageTimes().size()) : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+double field_recorded_ms(int index)
+{
+    const std::vector<StageTime>* times = nullptr;
+    if (g_pipeline_algo == 0 && g_miq) times = &g_miq->stageTimes();
+    else if (g_qc) times = &g_qc->stageTimes();
+    if (!times || index < 0 || index >= static_cast<int>(times->size())) return 0;
+    return (*times)[static_cast<size_t>(index)].ms;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int field_finish()
+{
+    if (g_pipeline_algo == 0) {
+        if (!g_miq) return -1;
+        snapshotMIQFields();
+        snapshotUV();
+        snapshotCornerUV();
+        publishStages(g_miq->stageTimes());
+        return 0;
+    }
+    if (!g_qc) return -1;
+    snapshotUV();
+    publishStages(g_qc->stageTimes());
+    return 0;
+}
 
 EMSCRIPTEN_KEEPALIVE
 void dispose()

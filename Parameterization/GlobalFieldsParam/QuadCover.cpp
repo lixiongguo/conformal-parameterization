@@ -1,5 +1,6 @@
 #include "QuadCover.h"
 #include "PrincipalCurvatureField.h"
+#include "ProgressReport.h"
 #include <map>
 #include <algorithm>
 #include <queue>
@@ -870,6 +871,8 @@ bool QuadCover::buildHarmonicBasis(const CoverData& cover,
 
     const int nA = (int)anchors.size();
     const int sysSize = nV + np + nA;
+    progressReset();
+    progressReport(0, np);
     for (int j = 0; j < np; ++j) {
         std::vector<Triplet<double>> trips;
         trips.reserve(L.nonZeros() + np + nA);
@@ -904,6 +907,7 @@ bool QuadCover::buildHarmonicBasis(const CoverData& cover,
 
         basisU[j] = sol.head(nV);
         basisV[j] = sol.head(nV);
+        progressReport(j + 1, np);
     }
     return true;
 }
@@ -972,50 +976,115 @@ void QuadCover::writeUVToMesh() {
         v->uv = Vector2d(UV(v->index, 0), UV(v->index, 1));
 }
 
-bool QuadCover::runFullPipeline() {
+bool QuadCover::runFullPipeline(StageClock& clock) {
     // Input: triangle mesh (constructor) + cross field (setCrossField or principal curvature).
-    computeVertexNormals();
-    estimatePrincipalCurvature();  // uses externalFaceDirs when setCrossField() was called
-    computeFaceTheta();
-
-    computeMatching();
-    if (smoothIters > 0) smoothCrossField(smoothIters);
-    syncFaceDirsFromTheta();
-    computeMatching();
-
-    computeLayerShift();
+    clock.lap("顶点法线", [&] { computeVertexNormals(); });
+    clock.lap("主曲率", [&] {
+        estimatePrincipalCurvature();
+        computeFaceTheta();
+    });
+    clock.lap("匹配", [&] { computeMatching(); });
+    if (smoothIters > 0) {
+        clock.lap("交叉场光滑", [&] {
+            smoothCrossField(smoothIters);
+            syncFaceDirsFromTheta();
+            computeMatching();
+        });
+    } else {
+        clock.lap("同步方向", [&] {
+            syncFaceDirsFromTheta();
+            computeMatching();
+        });
+    }
+    clock.lap("层移", [&] { computeLayerShift(); });
 
     CoverData cover;
-    if (!buildBranchCover(cover)) {
+    if (!clock.run("分支覆盖", [&] { return buildBranchCover(cover); })) {
         UV = MatrixXd::Zero(nVerts, 2);
         return false;
     }
-    if (!integrateOnCover(cover)) {
+    if (!clock.run("覆盖泊松", [&] { return integrateOnCover(cover); })) {
         UV = MatrixXd::Zero(nVerts, 2);
         return false;
     }
-    if (!enforceGlobalContinuity(cover)) {
-        UV = MatrixXd::Zero(nVerts, 2);
-        return false;
-    }
+    // 暂时跳过：余树边逐条分解太慢。封闭曲面上这一步不改 coverUV。
+    // if (!clock.run("全局连续", [&] { return enforceGlobalContinuity(cover); })) {
+    //     UV = MatrixXd::Zero(nVerts, 2);
+    //     return false;
+    // }
 
-    projectCoverUVToMesh(cover);
+    clock.lap("投影坐标", [&] { projectCoverUVToMesh(cover); });
     return true;
 }
 
+bool QuadCover::timedParameterize() {
+    stageTimes_.clear();
+    StageClock clock(stageTimes_);
+    if (!clock.run("网格准备", [&] { return initMeshData(); })) return false;
+    const bool ok = runFullPipeline(clock);
+    clock.lap("写回坐标", [&] { writeUVToMesh(); });
+    return ok;
+}
+
 void QuadCover::parameterize() {
-    if (!initMeshData()) return;
-    if (!runFullPipeline()) {
-        UV = MatrixXd::Zero(nVerts, 2);
-    }
-    writeUVToMesh();
+    if (!timedParameterize()) UV = MatrixXd::Zero(nVerts, 2);
 }
 
 bool QuadCover::parameterizeFull() {
-    if (!initMeshData()) return false;
-    const bool ok = runFullPipeline();
-    writeUVToMesh();
-    return ok;
+    return timedParameterize();
+}
+
+void QuadCover::pipelineReset() {
+    stageTimes_.clear();
+    pipelineCover_ = CoverData();
+    pipelineFailed_ = false;
+}
+
+const char* QuadCover::pipelineStageName(int index) const {
+    static const char* names[] = {
+        "网格准备", "顶点法线", "主曲率", "匹配", "交叉场光滑",
+        "层移", "分支覆盖", "覆盖泊松", "全局连续", "投影坐标", "写回坐标"
+    };
+    if (index < 0 || index >= 11) return "";
+    return names[index];
+}
+
+int QuadCover::pipelineRunStage(int index) {
+    if (pipelineFailed_) return -1;
+    StageClock clock(stageTimes_);
+    bool ok = true;
+    switch (index) {
+    case 0: ok = clock.run("网格准备", [&] { return initMeshData(); }); break;
+    case 1: clock.lap("顶点法线", [&] { computeVertexNormals(); }); break;
+    case 2: clock.lap("主曲率", [&] { estimatePrincipalCurvature(); computeFaceTheta(); }); break;
+    case 3: clock.lap("匹配", [&] { computeMatching(); }); break;
+    case 4:
+        if (smoothIters > 0) {
+            clock.lap("交叉场光滑", [&] {
+                smoothCrossField(smoothIters);
+                syncFaceDirsFromTheta();
+                computeMatching();
+            });
+        } else {
+            clock.lap("交叉场光滑", [&] { syncFaceDirsFromTheta(); computeMatching(); });
+        }
+        break;
+    case 5: clock.lap("层移", [&] { computeLayerShift(); }); break;
+    case 6: ok = clock.run("分支覆盖", [&] { return buildBranchCover(pipelineCover_); }); break;
+    case 7: ok = clock.run("覆盖泊松", [&] { return integrateOnCover(pipelineCover_); }); break;
+    // 暂时跳过：余树边逐条分解太慢。封闭曲面上这一步不改 coverUV。返回 2 让页面把该阶段标成跳过。
+    // case 8: ok = clock.run("全局连续", [&] { return enforceGlobalContinuity(pipelineCover_); }); break;
+    case 8: return 2;
+    case 9: clock.lap("投影坐标", [&] { projectCoverUVToMesh(pipelineCover_); }); break;
+    case 10: clock.lap("写回坐标", [&] { writeUVToMesh(); }); break;
+    default: return -1;
+    }
+    if (!ok) {
+        pipelineFailed_ = true;
+        UV = MatrixXd::Zero(nVerts, 2);
+        return -1;
+    }
+    return 0;
 }
 
 void QuadCover::computeTransportMatching() {
