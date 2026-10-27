@@ -47,6 +47,17 @@ public:
     void setSmoothIterations(int iters);
     void setRequirePureQuads(bool pureQuads);
 
+    // Mesh and principal directions after pipeline stage "主曲率", before smoothing.
+    struct PrincipalField {
+        Eigen::MatrixXd positions;
+        Eigen::VectorXi triangles;
+        Eigen::MatrixXd directions;
+        Eigen::MatrixXd normals;
+    };
+    PrincipalField principalField() const {
+        return {vertPos, faces, faceDirs_, faceNormals};
+    }
+
 protected:
     struct Edge { int v1, v2, f1, f2; };
 
