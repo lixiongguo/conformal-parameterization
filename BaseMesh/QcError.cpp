@@ -37,18 +37,17 @@ double QuasiConformalError::compute(std::vector<Eigen::Vector3d> p, std::vector<
     double Ey = (e2.cross(e1)).norm() / e1_norm;  // = |e2|*sin(angle)
     if (Ey < 1e-12) return 1.0;  // degenerate triangle
 
-    // E = [e1_norm,  Ex;  0, Ey]
-    // E^{-1} = [1/e1_norm, -Ex/(e1_norm*Ey);  0, 1/Ey]
+    // E = [e1_norm, Ex; 0, Ey], columns are the two local edges.
+    // E^{-1} = [1/e1_norm, -Ex/(e1_norm*Ey); 0, 1/Ey]
     double inv_e1 = 1.0 / e1_norm;
     double inv_Ey = 1.0 / Ey;
+    const double invE01 = -Ex * inv_e1 * inv_Ey;
 
-    // J = F * E^{-1}
-    // F = [f1.x(), f2.x();  f1.y(), f2.y()]  (2x2, column-major)
-    // J(i,j) = sum_k F(i,k) * E^{-1}(k,j)
-    double J00 = f1.x()*inv_e1 + f2.x()*(-Ex*inv_e1*inv_Ey);
-    double J01 = f2.x() * inv_Ey;
-    double J10 = f1.y()*inv_e1 + f2.y()*(-Ex*inv_e1*inv_Ey);
-    double J11 = f2.y() * inv_Ey;
+    // J = F * E^{-1}, with F's columns equal to the UV edges f1 and f2.
+    double J00 = f1.x() * inv_e1;
+    double J10 = f1.y() * inv_e1;
+    double J01 = f1.x() * invE01 + f2.x() * inv_Ey;
+    double J11 = f1.y() * invE01 + f2.y() * inv_Ey;
 
     // Compute singular values of J via SVD of 2x2 matrix
     // For 2x2 J, singular values are sqrt(eigenvalues of J^T J)
@@ -137,9 +136,8 @@ Eigen::Vector3d QuasiConformalError::hsv(double h, double s, double v)
 
 Eigen::Vector3d QuasiConformalError::color(double qc)
 {
-    // clamp to range [1, 1.5]
+    // Green at K = 1, yellow in between, red at K >= 1.5.
     qc = std::max(1.0, std::min(1.5, qc));
-    
-    // compute color
-    return hsv((2.0 - 4.0*(qc-1.0))/3.0, 0.7, 0.65);
+    const double t = (qc - 1.0) / 0.5;
+    return hsv((1.0 - t) / 3.0, 0.7, 0.65);
 }
