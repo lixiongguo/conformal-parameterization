@@ -37,6 +37,32 @@ public:
     using SignedEdge = std::pair<int, int>; // (edgeIdx, sign in {+1,-1})
     using Cycle = std::vector<SignedEdge>;
 
+    /** Edge indices are into the edge list passed to the builder. */
+    struct Parts {
+        std::vector<int> primalTree;
+        std::vector<int> dualTree;
+        std::vector<int> homologyEdges;
+        int visitedVertices = 0;
+        int visitedFaces = 0;
+    };
+
+    /**
+     * Tree, cotree, leftover homology edges, and fundamental cycles.
+     * Edge indices are indices of Mesh::edges.
+     */
+    struct Decomposition {
+        std::vector<int> primalTree;
+        std::vector<int> dualTree;
+        std::vector<int> homologyEdges;
+        std::vector<std::vector<int>> cycles;
+        int genus = 0;
+        int visitedVertices = 0;
+        int visitedFaces = 0;
+        int vertexCount = 0;
+        int faceCount = 0;
+        int edgeCount = 0;
+    };
+
     /**
      * Build a tree–cotree homology basis.
      *
@@ -55,7 +81,14 @@ public:
         const std::vector<Edge>& edges,
         int genus,
         FindEdgeFn findEdge,
-        EdgeSignFn edgeSign);
+        EdgeSignFn edgeSign,
+        Parts* parts = nullptr);
+
+    /**
+     * Same basis as buildClosedMeshBasis(mesh), plus the intermediate trees.
+     * Returns false when the mesh is not a closed triangle mesh.
+     */
+    static bool decompose(const Mesh& mesh, Decomposition& out);
 
     /**
      * Build a tree-cotree homology basis directly from a closed BaseMesh mesh.
@@ -180,10 +213,10 @@ std::vector<typename TreeCotreeBasis::Cycle> TreeCotreeBasis::buildClosedMeshBas
     const std::vector<Edge>& edges,
     int genus,
     FindEdgeFn findEdge,
-    EdgeSignFn edgeSign) {
+    EdgeSignFn edgeSign,
+    Parts* parts) {
 
     std::vector<Cycle> cycles;
-    if (genus <= 0) return cycles;
     if (nV <= 0 || nF <= 0 || edges.empty()) return cycles;
 
     const int nE = (int)edges.size();
@@ -264,7 +297,20 @@ std::vector<typename TreeCotreeBasis::Cycle> TreeCotreeBasis::buildClosedMeshBas
     }
 
     // Expect size==2g for a closed connected mesh, but keep robust.
-    const int target = 2 * genus;
+    const int target = std::max(0, 2 * genus);
+    if (parts) {
+        parts->primalTree.clear();
+        parts->dualTree.clear();
+        parts->homologyEdges = remainingEdges;
+        parts->visitedVertices = 0;
+        parts->visitedFaces = 0;
+        for (int ei = 0; ei < nE; ++ei) {
+            if (inPrimalTree[ei]) parts->primalTree.push_back(ei);
+            if (inDualTree[ei]) parts->dualTree.push_back(ei);
+        }
+        for (char seen : visitedV) parts->visitedVertices += seen ? 1 : 0;
+        for (char seen : visitedF) parts->visitedFaces += seen ? 1 : 0;
+    }
     if ((int)remainingEdges.size() > target) remainingEdges.resize(target);
 
     // Helper: LCA by climbing with depth (tree is rooted at 0)
@@ -385,7 +431,78 @@ inline std::vector<TreeCotreeBasis::Cycle> TreeCotreeBasis::buildClosedMeshBasis
         edges,
         genus,
         findEdge,
-        edgeSign);
+        edgeSign,
+        nullptr);
+}
+
+inline bool TreeCotreeBasis::decompose(const Mesh& mesh, Decomposition& out) {
+    out = Decomposition();
+    out.vertexCount = static_cast<int>(mesh.vertices.size());
+
+    std::vector<Edge> edges;
+    std::vector<int> meshEdgeIndexForBasisEdge;
+    if (!detail::extractClosedMeshEdges(mesh, edges, meshEdgeIndexForBasisEdge)) {
+        return false;
+    }
+
+    int nInteriorFaces = 0;
+    for (FaceCIter face = mesh.faces.begin(); face != mesh.faces.end(); ++face) {
+        if (!face->isBoundary()) ++nInteriorFaces;
+    }
+    out.faceCount = nInteriorFaces;
+    out.edgeCount = static_cast<int>(edges.size());
+
+    const int genus = detail::computeClosedMeshGenus(
+        out.vertexCount,
+        static_cast<int>(mesh.edges.size()),
+        nInteriorFaces);
+    if (genus < 0) return false;
+    out.genus = genus;
+
+    auto findEdge = [&](int a, int b) {
+        if (a > b) std::swap(a, b);
+        for (size_t i = 0; i < edges.size(); ++i) {
+            if (edges[i].v0 == a && edges[i].v1 == b) return static_cast<int>(i);
+        }
+        return -1;
+    };
+    auto edgeSign = [&](int from, int to) {
+        const int edgeIndex = findEdge(from, to);
+        if (edgeIndex < 0) return 0;
+        return (edges[edgeIndex].v0 == from && edges[edgeIndex].v1 == to) ? 1 : -1;
+    };
+
+    Parts parts;
+    const std::vector<Cycle> cycles = buildClosedMeshBasis(
+        out.vertexCount, nInteriorFaces, edges, genus, findEdge, edgeSign, &parts);
+
+    auto toMeshEdge = [&](int basisEdge) {
+        if (basisEdge < 0 || basisEdge >= static_cast<int>(meshEdgeIndexForBasisEdge.size())) return -1;
+        return meshEdgeIndexForBasisEdge[static_cast<size_t>(basisEdge)];
+    };
+    auto appendMapped = [&](const std::vector<int>& source, std::vector<int>& dest) {
+        dest.reserve(source.size());
+        for (int basisEdge : source) {
+            const int meshEdge = toMeshEdge(basisEdge);
+            if (meshEdge >= 0) dest.push_back(meshEdge);
+        }
+    };
+    appendMapped(parts.primalTree, out.primalTree);
+    appendMapped(parts.dualTree, out.dualTree);
+    appendMapped(parts.homologyEdges, out.homologyEdges);
+    out.visitedVertices = parts.visitedVertices;
+    out.visitedFaces = parts.visitedFaces;
+    out.cycles.reserve(cycles.size());
+    for (const Cycle& cycle : cycles) {
+        std::vector<int> meshCycle;
+        meshCycle.reserve(cycle.size());
+        for (const SignedEdge& signedEdge : cycle) {
+            const int meshEdge = toMeshEdge(signedEdge.first);
+            if (meshEdge >= 0) meshCycle.push_back(meshEdge);
+        }
+        if (!meshCycle.empty()) out.cycles.push_back(std::move(meshCycle));
+    }
+    return true;
 }
 
 inline bool TreeCotreeBasis::buildCutSeamMesh(
