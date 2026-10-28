@@ -32,6 +32,11 @@ IncrementalFlattening::IncrementalFlattening(Mesh& mesh0)
 {
 }
 
+void IncrementalFlattening::reportProgress(int phase, int completed, int total) const
+{
+    if (progress_) progress_(phase, completed, total);
+}
+
 int IncrementalFlattening::seamEdgeCount() const
 {
     int c = 0;
@@ -237,7 +242,13 @@ bool IncrementalFlattening::solveConstrainedPhi(const std::vector<int>& constrai
                                                 Eigen::VectorXd& phi) const
 {
     const int m = static_cast<int>(constraintVerts.size());
-    if (m == 0) return false;
+    if (m == 0 || rhs.size() != m) return false;
+
+    std::vector<int> columnOf(nV, -1);
+    for (int r = 0; r < m; ++r) {
+        const int vi = constraintVerts[r];
+        if (vi >= 0 && vi < nV) columnOf[vi] = r;
+    }
 
     std::vector<Triplet<double>> trips;
     trips.reserve(static_cast<size_t>(m) * 8);
@@ -245,30 +256,28 @@ bool IncrementalFlattening::solveConstrainedPhi(const std::vector<int>& constrai
         const int vi = constraintVerts[r];
         if (vi < 0 || vi >= nV) continue;
         for (SparseMatrix<double>::InnerIterator it(m_laplace, vi); it; ++it) {
-            trips.emplace_back(r, it.col(), it.value());
+            const int c = columnOf[it.col()];
+            if (c >= 0) trips.emplace_back(r, c, it.value());
         }
+        trips.emplace_back(r, r, 1e-8);
     }
 
-    SparseMatrix<double> Lc(m, nV);
-    Lc.setFromTriplets(trips.begin(), trips.end());
-
-    VectorXd invA = VectorXd::Ones(nV);
-    for (int i = 0; i < nV; ++i) {
-        invA(i) = 1.0 / (2.0 * m_vertexAreas(i));
-    }
-
-    const SparseMatrix<double> LcInvA = Lc * invA.asDiagonal();
-    const SparseMatrix<double> S = LcInvA * Lc.transpose();
+    SparseMatrix<double> system(m, m);
+    system.setFromTriplets(trips.begin(), trips.end());
 
     SimplicialLDLT<SparseMatrix<double>> solver;
-    solver.compute(S);
+    solver.compute(system);
     if (solver.info() != Success) return false;
 
-    VectorXd lambda = solver.solve(rhs);
-    if (!isFiniteVec(lambda)) return false;
+    const VectorXd phiOmega = solver.solve(rhs);
+    if (!isFiniteVec(phiOmega)) return false;
 
-    phi = invA.asDiagonal() * (Lc.transpose() * lambda);
-    return isFiniteVec(phi);
+    phi = VectorXd::Zero(nV);
+    for (int r = 0; r < m; ++r) {
+        const int vi = constraintVerts[r];
+        if (vi >= 0 && vi < nV) phi(vi) = phiOmega(r);
+    }
+    return true;
 }
 
 double IncrementalFlattening::roundToHalfPi(double k) const
@@ -286,6 +295,7 @@ bool IncrementalFlattening::identifyIsolatedCones(const std::vector<bool>& inOme
 
         bool isolated = true;
         HalfEdgeCIter h = mesh.vertices[vi].he;
+        int guard = 0;
         do {
             const int nb = h->flip->vertex->index;
             if (!inOmega[nb] && nb != vi) {
@@ -293,6 +303,10 @@ bool IncrementalFlattening::identifyIsolatedCones(const std::vector<bool>& inOme
                 break;
             }
             h = h->flip->next;
+            if (++guard > nV) {
+                isolated = false;
+                break;
+            }
         } while (h != mesh.vertices[vi].he);
 
         if (isolated) cones.push_back(vi);
@@ -312,7 +326,49 @@ void IncrementalFlattening::flatteningPhase()
     m_K = m_K0;
     m_coneVerts.clear();
 
+    if (!m_prescribedVerts.empty()) {
+        std::vector<double> curvature;
+        curvature.reserve(m_prescribedVerts.size());
+        for (size_t i = 0; i < m_prescribedVerts.size(); ++i) {
+            const int vi = m_prescribedVerts[i];
+            if (vi < 0 || vi >= nV || mesh.vertices[vi].isBoundary()) continue;
+            m_coneVerts.push_back(vi);
+            const double angle = i < m_prescribedAngle.size() ? m_prescribedAngle[i] : (2.0 * M_PI);
+            curvature.push_back(2.0 * M_PI - angle);
+        }
+        if (!m_coneVerts.empty()) {
+            std::set<int> coneSet(m_coneVerts.begin(), m_coneVerts.end());
+            std::vector<int> constraints;
+            std::vector<double> values;
+            constraints.reserve(static_cast<size_t>(nV));
+            for (int vi = 0; vi < nV; ++vi) {
+                if (mesh.vertices[vi].isBoundary() || coneSet.count(vi)) continue;
+                constraints.push_back(vi);
+                values.push_back(-m_K0(vi));
+            }
+            VectorXd rhs(static_cast<Eigen::Index>(values.size()));
+            for (size_t i = 0; i < values.size(); ++i) rhs(static_cast<Eigen::Index>(i)) = values[i];
+            VectorXd phiStep;
+            if (!constraints.empty() && solveConstrainedPhi(constraints, rhs, phiStep)) {
+                m_phi = phiStep;
+                m_K = m_K0 - m_laplace * m_phi;
+            }
+            m_coneK.resize(static_cast<Eigen::Index>(m_coneVerts.size()));
+            for (size_t i = 0; i < m_coneVerts.size(); ++i) {
+                m_coneK(static_cast<Eigen::Index>(i)) = curvature[i];
+                m_K(m_coneVerts[i]) = curvature[i];
+            }
+            return;
+        }
+    }
+
+    int interiorCount = 0;
+    for (int i = 0; i < nV; ++i) {
+        if (!mesh.vertices[i].isBoundary()) ++interiorCount;
+    }
+
     for (int iter = 0; iter < m_maxFlattenIters; ++iter) {
+        reportProgress(0, iter, m_maxFlattenIters);
         std::vector<bool> inOmega(nV, false);
         std::vector<int> omegaVerts;
         omegaVerts.reserve(nV);
@@ -325,7 +381,7 @@ void IncrementalFlattening::flatteningPhase()
             }
         }
 
-        if (omegaVerts.empty()) break;
+        if (omegaVerts.empty() || static_cast<int>(omegaVerts.size()) >= interiorCount) break;
 
         VectorXd rhs(omegaVerts.size());
         for (size_t r = 0; r < omegaVerts.size(); ++r) {
@@ -341,6 +397,12 @@ void IncrementalFlattening::flatteningPhase()
 
         std::vector<int> cones;
         if (identifyIsolatedCones(inOmega, cones)) {
+            constexpr int kMaxCones = 16;
+            if (static_cast<int>(cones.size()) > kMaxCones) {
+                std::partial_sort(cones.begin(), cones.begin() + kMaxCones, cones.end(),
+                                  [&](int a, int b) { return std::abs(m_K(a)) > std::abs(m_K(b)); });
+                cones.resize(kMaxCones);
+            }
             m_coneVerts = cones;
             break;
         }
@@ -375,23 +437,26 @@ void IncrementalFlattening::roundingPhase()
 
     auto buildConstraints = [&](std::vector<int>& constraints, VectorXd& rhs) {
         constraints.clear();
+        std::vector<double> values;
+        values.reserve(static_cast<size_t>(nV));
         for (int vi = 0; vi < nV; ++vi) {
             if (mesh.vertices[vi].isBoundary()) continue;
             const bool isCone = targetK.count(vi) > 0;
             if (isCone && fixed.count(vi)) {
                 constraints.push_back(vi);
-                rhs.conservativeResize(rhs.size() + 1);
-                rhs(rhs.size() - 1) = targetK[vi] - m_K0(vi);
+                values.push_back(targetK[vi] - m_K0(vi));
             } else if (!isCone) {
                 constraints.push_back(vi);
-                rhs.conservativeResize(rhs.size() + 1);
-                rhs(rhs.size() - 1) = -m_K0(vi);
+                values.push_back(-m_K0(vi));
             }
         }
+        rhs.resize(static_cast<Eigen::Index>(values.size()));
+        for (size_t i = 0; i < values.size(); ++i) rhs(static_cast<Eigen::Index>(i)) = values[i];
     };
 
     const int maxRound = static_cast<int>(m_coneVerts.size()) + 5;
     for (int roundIter = 0; roundIter < maxRound; ++roundIter) {
+        reportProgress(1, roundIter, maxRound);
         int pick = -1;
         double bestErr = std::numeric_limits<double>::max();
         for (const auto& kv : targetK) {
@@ -761,6 +826,8 @@ bool IncrementalFlattening::buildCutMesh()
     }
 
     std::map<std::pair<int, int>, int> vtxSheetToCut;
+    cm.cutPos.resize(std::max(nV * 2, 1), 3);
+    int cutCount = 0;
     auto getCutVert = [&](int origV, int sheet) -> int {
         if (origV < 0 || origV >= nV) return -1;
         const bool seamInterior = vtxOnSeam[origV] && !isMeshBoundaryVertex(origV);
@@ -769,12 +836,12 @@ bool IncrementalFlattening::buildCutMesh()
         auto it = vtxSheetToCut.find(key);
         if (it != vtxSheetToCut.end()) return it->second;
 
-        const int idx = static_cast<int>(cm.origVert.size());
+        const int idx = cutCount++;
+        if (idx >= cm.cutPos.rows()) cm.cutPos.conservativeResize(idx + nV, 3);
         cm.origVert.push_back(origV);
         cm.seamMate.push_back(-1);
         cm.cutUV.push_back(mesh.vertices[origV].uv);
         cm.isCutBoundary.push_back(isMeshBoundaryVertex(origV));
-        cm.cutPos.conservativeResize(idx + 1, 3);
         cm.cutPos.row(idx) = V.row(origV);
         vtxSheetToCut[key] = idx;
 
@@ -782,12 +849,12 @@ bool IncrementalFlattening::buildCutMesh()
             const int otherSheet = 1 - s;
             const std::pair<int, int> key2{origV, otherSheet};
             if (vtxSheetToCut.count(key2) == 0) {
-                const int idx2 = static_cast<int>(cm.origVert.size());
+                const int idx2 = cutCount++;
+                if (idx2 >= cm.cutPos.rows()) cm.cutPos.conservativeResize(idx2 + nV, 3);
                 cm.origVert.push_back(origV);
                 cm.seamMate.push_back(idx);
                 cm.cutUV.push_back(mesh.vertices[origV].uv);
                 cm.isCutBoundary.push_back(false);
-                cm.cutPos.conservativeResize(idx2 + 1, 3);
                 cm.cutPos.row(idx2) = V.row(origV);
                 vtxSheetToCut[key2] = idx2;
                 cm.seamMate[idx] = idx2;
@@ -809,6 +876,7 @@ bool IncrementalFlattening::buildCutMesh()
 
     cm.nCutVerts = static_cast<int>(cm.origVert.size());
     cm.nCutFaces = nF;
+    if (cutCount < cm.cutPos.rows()) cm.cutPos.conservativeResize(cutCount, 3);
     return cm.nCutVerts >= 3;
 }
 
@@ -997,8 +1065,24 @@ void IncrementalFlattening::solveCrossField(const Eigen::VectorXd& omega,
 
 void IncrementalFlattening::initCutMeshUV()
 {
-    Tutte tutte(mesh, TutteBoundary::CIRCLE);
-    tutte.parameterize();
+    if (nB > 0) {
+        Tutte tutte(mesh, TutteBoundary::CIRCLE);
+        tutte.setNormalize(false);
+        tutte.parameterize();
+    } else if (nF > 0) {
+        const Eigen::Vector3d origin = V.row(F[0]).transpose();
+        Eigen::Vector3d ex = V.row(F[1]).transpose() - origin;
+        if (ex.norm() < 1e-12) ex = Eigen::Vector3d(1.0, 0.0, 0.0);
+        else ex.normalize();
+        Eigen::Vector3d ey = V.row(F[2]).transpose() - origin;
+        ey -= ey.dot(ex) * ex;
+        if (ey.norm() < 1e-12) ey = Eigen::Vector3d(0.0, 1.0, 0.0);
+        else ey.normalize();
+        for (int i = 0; i < nV; ++i) {
+            const Eigen::Vector3d p = V.row(i).transpose() - origin;
+            mesh.vertices[i].uv = Eigen::Vector2d(p.dot(ex), p.dot(ey));
+        }
+    }
 
     CutMesh& cm = m_cutMesh;
     for (int cv = 0; cv < cm.nCutVerts; ++cv) {
@@ -1100,10 +1184,18 @@ void IncrementalFlattening::cutArapGlobalStep()
     const int nCV = cm.nCutVerts;
     if (nCV < 3) return;
 
+    std::vector<char> fixed(nCV, 0);
+    bool anyFixed = false;
+    for (int i = 0; i < nCV; ++i) {
+        fixed[i] = cm.isCutBoundary[i] ? 1 : 0;
+        anyFixed = anyFixed || fixed[i];
+    }
+    if (!anyFixed) fixed[0] = 1;
+
     std::vector<int> interiorIdx(nCV, -1);
     int nInterior = 0;
     for (int i = 0; i < nCV; ++i) {
-        if (!cm.isCutBoundary[i]) interiorIdx[i] = nInterior++;
+        if (!fixed[i]) interiorIdx[i] = nInterior++;
     }
     if (nInterior == 0) return;
 
@@ -1151,24 +1243,24 @@ void IncrementalFlattening::cutArapGlobalStep()
             const int vi = vIdx[a];
             const int vj = vIdx[b];
 
-            if (!cm.isCutBoundary[vi]) {
+            if (!fixed[vi]) {
                 const int ri = interiorIdx[vi];
                 triplets.emplace_back(ri, ri, w);
                 bx(ri) += w * rotDx.x();
                 by(ri) += w * rotDx.y();
-                if (cm.isCutBoundary[vj]) {
+                if (fixed[vj]) {
                     bx(ri) += w * cm.cutUV[vj].x();
                     by(ri) += w * cm.cutUV[vj].y();
                 } else {
                     triplets.emplace_back(ri, interiorIdx[vj], -w);
                 }
             }
-            if (!cm.isCutBoundary[vj]) {
+            if (!fixed[vj]) {
                 const int rj = interiorIdx[vj];
                 triplets.emplace_back(rj, rj, w);
                 bx(rj) -= w * rotDx.x();
                 by(rj) -= w * rotDx.y();
-                if (cm.isCutBoundary[vi]) {
+                if (fixed[vi]) {
                     bx(rj) += w * cm.cutUV[vi].x();
                     by(rj) += w * cm.cutUV[vi].y();
                 } else {
@@ -1190,7 +1282,7 @@ void IncrementalFlattening::cutArapGlobalStep()
     if (!isFiniteVec(ux) || !isFiniteVec(uy)) return;
 
     for (int i = 0; i < nCV; ++i) {
-        if (!cm.isCutBoundary[i]) {
+        if (!fixed[i]) {
             cm.cutUV[i] = Vector2d(ux(interiorIdx[i]), uy(interiorIdx[i]));
         }
     }
@@ -1220,6 +1312,7 @@ void IncrementalFlattening::projectCutUVToMesh()
 
 void IncrementalFlattening::globalArapPhase()
 {
+    reportProgress(2, 0, 1);
     buildCutSeams();
     if (!buildCutMesh()) {
         std::cerr << "[IncrementalFlattening] cut mesh build failed, fallback Tutte\n";
@@ -1253,6 +1346,7 @@ void IncrementalFlattening::globalArapPhase()
     }
 
     m_omega = VectorXd::Zero(nE);
+    reportProgress(3, 0, 1);
     if (!solveEdgeOmegas(vertexHolonomy, extra, m_omega, true)) {
         m_omega.setZero();
     }
@@ -1272,6 +1366,7 @@ void IncrementalFlattening::globalArapPhase()
     initCutMeshUV();
 
     for (int iter = 0; iter < m_maxArapIters; ++iter) {
+        reportProgress(4, iter, m_maxArapIters);
         cutArapLocalStep();
         enforceSeamRotations();
         cutArapGlobalStep();

@@ -19,6 +19,9 @@ public:
     
     // parameterize
     void parameterize() override;
+
+    // Called during the angle quadratic program, with completed and total iterations.
+    void setProgressCallback(void (*callback)(int completed, int total));
     
     // setConeSingulars() is inherited from ConeParameterization
     
@@ -63,6 +66,7 @@ protected:
     MosekSolver::Solver mosekSolver;
     Solver solver;
     int OptScheme;
+    void (*progress_)(int completed, int total);
 };
 
 #endif 

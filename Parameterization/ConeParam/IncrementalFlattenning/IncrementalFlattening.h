@@ -26,6 +26,12 @@ public:
     void setMaxArapIters(int iters) { m_maxArapIters = iters; }
     void setEpsilon0(double eps) { m_epsilon0 = eps; }
     void setEpsilonGrowth(double g) { m_epsilonGrowth = g; }
+    // phase: 0 摊平, 1 曲率取整, 2 割缝, 3 交叉场, 4 ARAP
+    void setProgressCallback(void (*callback)(int phase, int completed, int total)) { progress_ = callback; }
+    void setPrescribedCones(const std::vector<int>& indices, const std::vector<double>& angles) {
+        m_prescribedVerts = indices;
+        m_prescribedAngle = angles;
+    }
 
     const std::vector<int>& coneVertices() const { return m_coneVerts; }
     const Eigen::VectorXd& coneCurvatures() const { return m_coneK; }
@@ -135,10 +141,15 @@ private:
     CutMesh m_cutMesh;
     std::vector<Eigen::Matrix2d> m_cutRotations;
 
-    int m_maxFlattenIters = 80;
-    int m_maxArapIters = 30;
+    int m_maxFlattenIters = 24;
+    int m_maxArapIters = 12;
     double m_epsilon0 = -1.0;
-    double m_epsilonGrowth = 1.35;
+    double m_epsilonGrowth = 1.5;
+    std::vector<int> m_prescribedVerts;
+    std::vector<double> m_prescribedAngle;
+    void (*progress_)(int phase, int completed, int total) = nullptr;
+
+    void reportProgress(int phase, int completed, int total) const;
 };
 
 #endif

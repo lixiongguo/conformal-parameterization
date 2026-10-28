@@ -8,7 +8,8 @@
 
 namespace {
 
-bool solveAngleQuadraticProgram(const QPsolver::MinNormBoxQPProblem& problem, Eigen::VectorXd& corrections) {
+bool solveAngleQuadraticProgram(const QPsolver::MinNormBoxQPProblem& problem, Eigen::VectorXd& corrections,
+                                void (*progress)(int completed, int total)) {
     if (problem.n <= 0 || problem.m < 0) return false;
     const int variables = problem.n;
     const int rows = problem.m + variables;
@@ -73,8 +74,10 @@ bool solveAngleQuadraticProgram(const QPsolver::MinNormBoxQPProblem& problem, Ei
     }
     osqp_set_default_settings(settings);
     settings->verbose = 0;
-    settings->polish = 1;
-    settings->max_iter = 8000;
+    settings->polish = 0;
+    settings->warm_start = 1;
+    settings->max_iter = 200;
+    settings->check_termination = 25;
     settings->eps_abs = 1e-5;
     settings->eps_rel = 1e-5;
 
@@ -91,8 +94,25 @@ bool solveAngleQuadraticProgram(const QPsolver::MinNormBoxQPProblem& problem, Ei
     const c_int setup = osqp_setup(&work, &data, settings);
     bool solved = false;
     if (setup == 0 && work) {
-        osqp_solve(work);
-        const c_int status = work->info ? work->info->status_val : OSQP_UNSOLVED;
+        constexpr c_int kChunk = 200;
+        constexpr c_int kMaxIter = 8000;
+        c_int completed = 0;
+        c_int status = OSQP_UNSOLVED;
+        while (completed < kMaxIter) {
+            osqp_solve(work);
+            const c_int step = work->info ? work->info->iter : 0;
+            status = work->info ? work->info->status_val : OSQP_UNSOLVED;
+            completed += step > 0 ? step : kChunk;
+            if (progress) progress(std::min(completed, kMaxIter), kMaxIter);
+            if (status == OSQP_SOLVED || status == OSQP_SOLVED_INACCURATE) break;
+            if (status != OSQP_MAX_ITER_REACHED || step <= 0) break;
+        }
+        if (status == OSQP_SOLVED || status == OSQP_SOLVED_INACCURATE) {
+            osqp_update_polish(work, 1);
+            osqp_update_max_iter(work, kChunk);
+            osqp_solve(work);
+            status = work->info ? work->info->status_val : status;
+        }
         if ((status == OSQP_SOLVED || status == OSQP_SOLVED_INACCURATE) && work->solution && work->solution->x) {
             corrections.resize(variables);
             for (int variable = 0; variable < variables; ++variable) corrections[variable] = work->solution->x[variable];
@@ -116,10 +136,16 @@ thetas(mesh.edges.size()),
 radii(std::max(1, (int)mesh.faces.size() - (int)mesh.boundaries.size())),
 eIntIndices(mesh.edges.size()),
 imaginaryHe(0),
-OptScheme(optScheme0)
+OptScheme(optScheme0),
+progress_(nullptr)
 {
   // One radius per interior (non-imaginary-boundary) face; indices use Face::index.
   solver.n = std::max(1, (int)mesh.faces.size() - (int)mesh.boundaries.size());
+}
+
+void CirclePatterns::setProgressCallback(void (*callback)(int completed, int total))
+{
+    progress_ = callback;
 }
 
 // setConeSingulars() is inherited from ConeParameterization
@@ -348,7 +374,7 @@ bool CirclePatterns::computeAngles()
 
     Eigen::VectorXd corrections;
 #if defined(CONE_USE_OSQP)
-    if (solveAngleQuadraticProgram(qp, corrections) && corrections.size() == variables) {
+    if (solveAngleQuadraticProgram(qp, corrections, progress_) && corrections.size() == variables) {
         int b = 0;
         for (HalfEdgeCIter he = mesh.halfEdges.begin(); he != mesh.halfEdges.end(); he++) {
             if (!he->onBoundary) angles[he->index] = he->angle() + corrections[b++];

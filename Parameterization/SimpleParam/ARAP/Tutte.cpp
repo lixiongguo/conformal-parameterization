@@ -85,15 +85,16 @@ void Tutte::pinTwoVertices(std::vector<int>& pinVerts)
         } while (he1 != heStart);
     }
     
-    // Fallback: no boundary (should not happen for disk meshes)
+    // Closed surfaces have no boundary loop. Pin the origin and its farthest vertex.
     if (maxDist2 < 1e-24) {
         const int N = (int)mesh.vertices.size();
-        for (int i = 0; i < N; i++) {
-            for (int j = i + 1; j < N; j++) {
-                const double d2 = (mesh.vertices[j].position - mesh.vertices[i].position).squaredNorm();
+        if (N >= 2) {
+            bestA = 0;
+            const Eigen::Vector3d origin = mesh.vertices[0].position;
+            for (int j = 1; j < N; ++j) {
+                const double d2 = (mesh.vertices[j].position - origin).squaredNorm();
                 if (d2 > maxDist2) {
                     maxDist2 = d2;
-                    bestA = i;
                     bestB = j;
                 }
             }

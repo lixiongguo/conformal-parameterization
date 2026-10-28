@@ -43,6 +43,8 @@ protected:
     void computeEnergy(double& energy, const Eigen::VectorXd& u);
     void computeGradient(Eigen::VectorXd& gradient, const Eigen::VectorXd& u);
     void computeHessian(Eigen::SparseMatrix<double>& hessian, const Eigen::VectorXd& u);
+    void curvatureResidual(Eigen::VectorXd& residual) const;
+    void curvatureJacobian(Eigen::SparseMatrix<double>& jacobian) const;
     
     // edge length from circle packing metric
     double edgeLengthFromMetric(double ui, double uj, double Iij) const;

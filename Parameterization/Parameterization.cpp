@@ -1,5 +1,6 @@
 #include "Parameterization.h"
 #include "QcError.h"
+#include <cmath>
 
 Parameterization::Parameterization(Mesh& mesh0):
 mesh(mesh0)
@@ -47,6 +48,7 @@ void Parameterization::normalize()
         totalArea += area;
     }
     center /= totalArea;
+    if (!center.allFinite()) return;
     
     // shift
     double r = 0.0;
@@ -57,6 +59,7 @@ void Parameterization::normalize()
     
     // scale
     r = sqrt(r);
+    if (!(r > 1e-12) || !std::isfinite(r)) return;
     for (VertexIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
         v->uv /= r;
     }

@@ -54,11 +54,13 @@ void Solver::gradientDescent()
         Eigen::VectorXd xnv = xn - v;
         handle->computeEnergy(fp, v);
         handle->computeEnergy(f, xn);
-        while (f > fp + g.dot(xnv) + xnv.dot(xnv)/(2*t)) {
+        int lineSearchSteps = 0;
+        while (t > 1e-8 && lineSearchSteps < 40 && f > fp + g.dot(xnv) + xnv.dot(xnv)/(2*t)) {
             t = beta*t;
             xn = v - t*g;
             xnv = xn - v;
             handle->computeEnergy(f, xn);
+            ++lineSearchSteps;
         }
     
         // update
@@ -96,6 +98,7 @@ void Solver::newton()
         // compute update direction
         Eigen::VectorXd g(n);
         handle->computeGradient(g, x);
+        if (gradientTolerance > 0.0 && g.norm() < gradientTolerance) break;
 
         Eigen::SparseMatrix<double> H(n, n);
         handle->computeHessian(H, x);
@@ -113,10 +116,13 @@ void Solver::newton()
         double t = 1.0;
         double fp = f;
         handle->computeEnergy(f, x - t*p);
-        while (f > fp - alpha*t*g.dot(p)) {
+        int lineSearchSteps = 0;
+        while (t > 1e-8 && lineSearchSteps < 40 && f > fp - alpha*t*g.dot(p)) {
             t = beta*t;
             handle->computeEnergy(f, x - t*p);
+            ++lineSearchSteps;
         }
+        if (!(f < fp)) break;
 
         // update
         x -= t*p;
@@ -124,7 +130,7 @@ void Solver::newton()
         k++;
 
         // check termination condition
-        if (fabs(f - fp) < EPSILON || k > MAX_ITERS) break;
+        if (fabs(f - fp) < EPSILON || k > maxIterations) break;
     }
     
     std::cout << "Iterations: " << k << std::endl;

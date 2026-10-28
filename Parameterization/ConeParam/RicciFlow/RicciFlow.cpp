@@ -132,159 +132,83 @@ void RicciFlow::computeEdgeLengthsAndAngles()
 
 void RicciFlow::computeEnergy(double& energy, const Eigen::VectorXd& u)
 {
-    // Ricci energy is convex and defined such that ∇E = K - K̄
-    // We integrate: E(u) = ∫₀¹ Σᵢ (K_i(tu) - K̄_i) u_i dt
-    // 
-    // For practical computation, we compute the energy as the sum of
-    // triangle-based terms (the "Ricci energy" as formulated by Gu et al.)
-    // 
-    // Simplified: use trapezoidal rule to approximate the integral
-    // E ≈ Σᵢ [K_i(0)·u_i + K_i(u)·u_i] / 2 - Σᵢ K̄_i·u_i
-    // But since K_i(0) is the original curvature and is not easily available,
-    // we use a direct approach:
-    //
-    // The discrete Ricci energy for Euclidean geometry is:
-    // E(u) = Σ_f V_f(u) - Σ_i (Σ_f α_f,i(0)) u_i + Σ_i K̄_i u_i
-    // where V_f is related to the volume of an ideal tetrahedron
-    
-    // For simplicity and robustness, we implement energy in terms of
-    // line integral approximation with midpoint rule
-    
-    // Actually, the standard energy formulation by Gu-Yau et al.:
-    // E(u) = ∫₀ᵗ Σ_i (K_i - K̄_i) u̇_i dt
-    // This is the work done by the Ricci flow.
-    // We can compute it incrementally or use the known closed form.
-    
-    // Closed form for Euclidean Ricci energy (Gu & Yau, 2008):
-    // For each face f = (i,j,k) with edge lengths l_ij, l_jk, l_ki:
-    // The energy contribution is related to the dilogarithm function.
-    // We use a simpler numerical approach: direct curvature-based energy.
-    
-    // Compute current curvature
-    Eigen::VectorXd K(solver.n);
-    K.setZero();
-    
-    for (FaceCIter f = mesh.faces.begin(); f != mesh.faces.end(); f++) {
-        if (f->isBoundary()) continue;
-        
-        HalfEdgeCIter he = f->he;
+    (void)u;
+    Eigen::VectorXd residual;
+    curvatureResidual(residual);
+    energy = 0.5 * residual.squaredNorm();
+}
+
+void RicciFlow::curvatureResidual(Eigen::VectorXd& residual) const
+{
+    residual = Eigen::VectorXd::Constant(solver.n, 2.0 * M_PI);
+    for (FaceCIter face = mesh.faces.begin(); face != mesh.faces.end(); ++face) {
+        if (face->isBoundary()) continue;
+        HalfEdgeCIter he = face->he;
         do {
             if (!he->vertex->isBoundary()) {
-                int vIdx = index.at(he->vertex->index);
-                K[vIdx] += halfEdgeAngles[he->index];
+                residual[index.at(he->vertex->index)] -= halfEdgeAngles[he->index];
             }
             he = he->next;
-        } while (he != f->he);
+        } while (he != face->he);
     }
-    
-    // K_i = 2π - Σ angles  (or π for boundary, but boundaries are fixed)
-    for (int i = 0; i < solver.n; i++) {
-        K[i] = 2.0 * M_PI - K[i];
+    residual -= Ktarget;
+}
+
+namespace {
+
+double clampedCotangent(double angle)
+{
+    const double sine = std::sin(angle);
+    const double cosine = std::cos(angle);
+    if (std::abs(sine) < 1e-8) return std::copysign(1e6, cosine == 0.0 ? 1.0 : cosine);
+    return std::max(-1e6, std::min(1e6, cosine / sine));
+}
+
+} // namespace
+
+void RicciFlow::curvatureJacobian(Eigen::SparseMatrix<double>& jacobian) const
+{
+    std::vector<Eigen::Triplet<double>> triplets;
+    for (VertexCIter vertex = mesh.vertices.begin(); vertex != mesh.vertices.end(); ++vertex) {
+        if (vertex->isBoundary()) continue;
+        const int row = index.at(vertex->index);
+        HalfEdgeCIter he = vertex->he;
+        double diagonal = 0.0;
+        do {
+            double weight = 0.0;
+            if (!he->onBoundary) weight += clampedCotangent(halfEdgeAngles[he->next->next->index]);
+            if (!he->flip->onBoundary) weight += clampedCotangent(halfEdgeAngles[he->flip->next->next->index]);
+            diagonal += weight;
+            if (!he->flip->vertex->isBoundary()) {
+                triplets.emplace_back(row, index.at(he->flip->vertex->index), -weight);
+            }
+            he = he->flip->next;
+        } while (he != vertex->he);
+        triplets.emplace_back(row, row, diagonal);
     }
-    
-    // Ricci energy approximation:
-    // E(u) ≈ ½ Σ_i (K_i(u) + K_i(0) - 2K̄_i) · u_i
-    // But we don't have K_i(0) stored... Let's use a different approach.
-    
-    // Actually the convex Ricci energy has the form:
-    // E(u) = Σ_f F_f(u) + Σ_i K̄_i · u_i
-    // where F_f is related to the Lobachevsky function.
-    // ∇E_i = K_i - K̄_i
-    
-    // For Newton's method, we only need gradient and Hessian.
-    // The energy value is used for line search in the solver.
-    // We can use the line integral approximation:
-    
-    energy = 0.0;
-    // E = Σ_i ∫_0^{u_i} (K_i(t) - K̄_i) dt
-    // ≈ Σ_i ½(K_i(0) + K_i(u) - 2K̄_i) · u_i
-    // We approximate K_i(0) ≈ K_i(0.5u) by computing curvature at u/2
-    
-    // But this is expensive. Instead, use a simple quadratic approximation
-    // that has the correct gradient. For convex functions with known gradient,
-    // the energy for line search purposes just needs to be consistent.
-    
-    // We'll compute a pseudo-energy that has the right gradient:
-    // E = ½ Σ_i u_i · (K_i(u) - 2K̄_i)
-    // This is not the exact Ricci energy but is consistent with gradient descent.
-    
-    for (int i = 0; i < solver.n; i++) {
-        energy += 0.5 * u[i] * (K[i] - 2.0 * Ktarget[i]);
-    }
-    
-    // Add small regularization for stability
-    energy += 1e-8 * u.squaredNorm();
+    jacobian.resize(solver.n, solver.n);
+    jacobian.setFromTriplets(triplets.begin(), triplets.end());
 }
 
 void RicciFlow::computeGradient(Eigen::VectorXd& gradient, const Eigen::VectorXd& u)
 {
-    gradient.resize(solver.n);
-    gradient.setZero();
-    
-    // Gradient: ∇E_i = K_i - K̄_i
-    // where K_i = 2π - Σ(angles around vertex i) for interior vertices
-    
-    for (FaceCIter f = mesh.faces.begin(); f != mesh.faces.end(); f++) {
-        if (f->isBoundary()) continue;
-        
-        HalfEdgeCIter he = f->he;
-        do {
-            if (!he->vertex->isBoundary()) {
-                int vIdx = index.at(he->vertex->index);
-                gradient[vIdx] -= halfEdgeAngles[he->index]; // subtract angle sum
-            }
-            he = he->next;
-        } while (he != f->he);
-    }
-    
-    // Complete: K_i = 2π - Σ angles, so ∇E_i = (2π - Σ angles) - K̄_i
-    for (int i = 0; i < solver.n; i++) {
-        gradient[i] = (2.0 * M_PI + gradient[i]) - Ktarget[i];
-    }
+    (void)u;
+    Eigen::VectorXd residual;
+    curvatureResidual(residual);
+    Eigen::SparseMatrix<double> jacobian;
+    curvatureJacobian(jacobian);
+    gradient = jacobian.transpose() * residual;
 }
 
 void RicciFlow::computeHessian(Eigen::SparseMatrix<double>& hessian, const Eigen::VectorXd& u)
 {
-    // Ricci flow Hessian = ∂K/∂u = weighted cotangent Laplacian
-    // ∂K_i/∂u_j = -w_ij (for i ≠ j), ∂K_i/∂u_i = Σ_j w_ij
-    // where w_ij = cot(α_ij^k) + cot(α_ij^l) (standard cotangent weights)
-    
-    std::vector<Eigen::Triplet<double>> HTriplets;
-    
-    for (VertexCIter v = mesh.vertices.begin(); v != mesh.vertices.end(); v++) {
-        if (v->isBoundary()) continue;
-        
-        int vIdx = index.at(v->index);
-        HalfEdgeCIter he = v->he;
-        double sumW = 0.0;
-        
-        do {
-            // Edge from v to neighbor: he points to neighbor
-            // cot(angle opposite to this edge) = cot(angle at he->next->vertex)
-            // cot(α) = 1/tan(α). 当三角形近乎退化时 (α→0 或 α→π), 
-            // tan(α)→0, 1/tan(α)→∞, 导致 Hessian 条件数爆炸 → Cholesky 失败.
-            // 对 tan 值做下界 clamp 以防止除零/溢出.
-            double cotAlpha = !he->onBoundary ? 
-                1.0 / std::max(tan(halfEdgeAngles[he->next->index]), 1e-10) : 0.0;
-            double cotBeta  = !he->flip->onBoundary ? 
-                1.0 / std::max(tan(halfEdgeAngles[he->flip->next->index]), 1e-10) : 0.0;
-            
-            double w = (cotAlpha + cotBeta);
-            sumW += w;
-            
-            if (!he->flip->vertex->isBoundary()) {
-                HTriplets.push_back(Eigen::Triplet<double>(vIdx, index.at(he->flip->vertex->index), -w));
-            }
-            
-            he = he->flip->next;
-        } while (he != v->he);
-        
-        // Diagonal: sum of weights + regularization (eliminates nullspace of global scaling)
-        HTriplets.push_back(Eigen::Triplet<double>(vIdx, vIdx, sumW + 1e-4));
-    }
-    
-    hessian.resize(solver.n, solver.n);
-    hessian.setFromTriplets(HTriplets.begin(), HTriplets.end());
+    (void)u;
+    Eigen::SparseMatrix<double> jacobian;
+    curvatureJacobian(jacobian);
+    hessian = jacobian.transpose() * jacobian;
+    Eigen::SparseMatrix<double> ridge(solver.n, solver.n);
+    ridge.setIdentity();
+    hessian += 1e-8 * ridge;
 }
 
 // ============================================================
@@ -315,19 +239,29 @@ bool RicciFlow::optimizeRadii()
     };
     
     handle.computeGradient = [this](Eigen::VectorXd& gradient, const Eigen::VectorXd& u) {
-        // Guard against NaN
         if (!u.allFinite()) {
             gradient = Eigen::VectorXd::Zero(u.size());
             return;
         }
+        this->solver.x = u;
+        this->computeEdgeLengthsAndAngles();
         this->computeGradient(gradient, u);
     };
     
     handle.computeHessian = [this](Eigen::SparseMatrix<double>& hessian, const Eigen::VectorXd& u) {
+        if (!u.allFinite()) {
+            hessian.resize(u.size(), u.size());
+            hessian.setIdentity();
+            return;
+        }
+        this->solver.x = u;
+        this->computeEdgeLengthsAndAngles();
         this->computeHessian(hessian, u);
     };
     
     solver.handle = &handle;
+    solver.maxIterations = 30;
+    solver.gradientTolerance = 1e-4;
     
     // Run optimization
     if (OptScheme == GRAD_DESCENT) {
