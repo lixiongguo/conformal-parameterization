@@ -962,6 +962,7 @@ void QuadCover::projectCoverUVToMesh(const CoverData& cover) {
         }
     }
 
+    chartUV_ = UV;
     double uMin = UV.col(0).minCoeff(), uMax = UV.col(0).maxCoeff();
     double vMin = UV.col(1).minCoeff(), vMax = UV.col(1).maxCoeff();
     const double scale = std::max(uMax - uMin, vMax - vMin);

@@ -3,7 +3,7 @@
 
 #include "ConeParameterization.h"
 #include "Solver.h"
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(CONE_USE_OSQP)
 #include "MosekStub.h"
 #else
 #include "MosekSolver.h"

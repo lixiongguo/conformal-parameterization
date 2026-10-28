@@ -127,19 +127,23 @@ void MIQQuad::initCrossField()
         faceT1.row(fi) = t1;
         faceT2.row(fi) = t2;
 
-        const Vector3d e0 = p1 - p0;
-        const Vector3d e1 = p2 - p1;
-        const Vector3d e2 = p0 - p2;
-        const double l0 = e0.squaredNorm();
-        const double l1 = e1.squaredNorm();
-        const double l2 = e2.squaredNorm();
-        Vector3d d;
-        if (l0 > l1 && l0 > l2) d = e0;
-        else if (l1 > l0 && l1 > l2) d = e1;
-        else d = e2;
-        const double dx = d.dot(t1);
-        const double dy = d.dot(t2);
-        theta(fi) = std::atan2(dy, dx);
+        Vector3d d = Vector3d::Zero();
+        if (hasExternalField_ && faceDirs_.rows() == nF && faceDirs_.cols() == 3) {
+            d = faceDirs_.row(fi);
+            d -= d.dot(fn) * fn;
+        }
+        if (d.norm() < 1e-12) {
+            const Vector3d e0 = p1 - p0;
+            const Vector3d e1 = p2 - p1;
+            const Vector3d e2 = p0 - p2;
+            const double l0 = e0.squaredNorm();
+            const double l1 = e1.squaredNorm();
+            const double l2 = e2.squaredNorm();
+            if (l0 > l1 && l0 > l2) d = e0;
+            else if (l1 > l0 && l1 > l2) d = e1;
+            else d = e2;
+        }
+        theta(fi) = std::atan2(d.dot(t2), d.dot(t1));
     }
 }
 

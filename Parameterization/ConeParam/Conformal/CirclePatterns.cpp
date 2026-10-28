@@ -3,6 +3,112 @@
 #include "QPSolver.h"
 #include "Clausen_integral.h"
 
+#if defined(CONE_USE_OSQP)
+#include "osqp.h"
+
+namespace {
+
+bool solveAngleQuadraticProgram(const QPsolver::MinNormBoxQPProblem& problem, Eigen::VectorXd& corrections) {
+    if (problem.n <= 0 || problem.m < 0) return false;
+    const int variables = problem.n;
+    const int rows = problem.m + variables;
+    Eigen::SparseMatrix<double> stacked(rows, variables);
+    std::vector<Eigen::Triplet<double>> triplets;
+    triplets.reserve(static_cast<size_t>(problem.A.nonZeros() + variables));
+    for (int column = 0; column < problem.A.outerSize(); ++column) {
+        for (Eigen::SparseMatrix<double>::InnerIterator it(problem.A, column); it; ++it) {
+            triplets.emplace_back(it.row(), it.col(), it.value());
+        }
+    }
+    for (int variable = 0; variable < variables; ++variable) {
+        triplets.emplace_back(problem.m + variable, variable, 1.0);
+    }
+    stacked.setFromTriplets(triplets.begin(), triplets.end());
+    stacked.makeCompressed();
+
+    csc* objective = csc_spalloc(variables, variables, variables, 1, 0);
+    csc* constraint = csc_spalloc(rows, variables, static_cast<c_int>(stacked.nonZeros()), 1, 0);
+    if (!objective || !constraint) {
+        csc_spfree(objective);
+        csc_spfree(constraint);
+        return false;
+    }
+    for (int variable = 0; variable < variables; ++variable) {
+        objective->p[variable] = variable;
+        objective->i[variable] = variable;
+        objective->x[variable] = 1.0;
+    }
+    objective->p[variables] = variables;
+    objective->nzmax = variables;
+
+    constraint->p[0] = 0;
+    c_int filled = 0;
+    for (int column = 0; column < variables; ++column) {
+        for (Eigen::SparseMatrix<double>::InnerIterator it(stacked, column); it; ++it) {
+            constraint->i[filled] = it.row();
+            constraint->x[filled] = it.value();
+            ++filled;
+        }
+        constraint->p[column + 1] = filled;
+    }
+    constraint->nzmax = filled;
+
+    std::vector<c_float> linear(static_cast<size_t>(variables), 0.0);
+    std::vector<c_float> lower(static_cast<size_t>(rows));
+    std::vector<c_float> upper(static_cast<size_t>(rows));
+    for (int row = 0; row < problem.m; ++row) {
+        lower[static_cast<size_t>(row)] = problem.lowerY[row];
+        upper[static_cast<size_t>(row)] = problem.upperY[row];
+    }
+    for (int variable = 0; variable < variables; ++variable) {
+        lower[static_cast<size_t>(problem.m + variable)] = problem.lowerX[variable];
+        upper[static_cast<size_t>(problem.m + variable)] = problem.upperX[variable];
+    }
+
+    OSQPSettings* settings = static_cast<OSQPSettings*>(c_malloc(sizeof(OSQPSettings)));
+    if (!settings) {
+        csc_spfree(objective);
+        csc_spfree(constraint);
+        return false;
+    }
+    osqp_set_default_settings(settings);
+    settings->verbose = 0;
+    settings->polish = 1;
+    settings->max_iter = 8000;
+    settings->eps_abs = 1e-5;
+    settings->eps_rel = 1e-5;
+
+    OSQPData data;
+    data.n = variables;
+    data.m = rows;
+    data.P = objective;
+    data.A = constraint;
+    data.q = linear.data();
+    data.l = lower.data();
+    data.u = upper.data();
+
+    OSQPWorkspace* work = nullptr;
+    const c_int setup = osqp_setup(&work, &data, settings);
+    bool solved = false;
+    if (setup == 0 && work) {
+        osqp_solve(work);
+        const c_int status = work->info ? work->info->status_val : OSQP_UNSOLVED;
+        if ((status == OSQP_SOLVED || status == OSQP_SOLVED_INACCURATE) && work->solution && work->solution->x) {
+            corrections.resize(variables);
+            for (int variable = 0; variable < variables; ++variable) corrections[variable] = work->solution->x[variable];
+            solved = true;
+        }
+        osqp_cleanup(work);
+    }
+    c_free(settings);
+    csc_spfree(objective);
+    csc_spfree(constraint);
+    return solved;
+}
+
+} // namespace
+#endif
+
 CirclePatterns::CirclePatterns(Mesh& mesh0, int optScheme0):
 ConeParameterization(mesh0),
 angles(mesh.halfEdges.size()),
@@ -241,6 +347,21 @@ bool CirclePatterns::computeAngles()
     qp.A.setFromTriplets(triplets.begin(), triplets.end());
 
     Eigen::VectorXd corrections;
+#if defined(CONE_USE_OSQP)
+    if (solveAngleQuadraticProgram(qp, corrections) && corrections.size() == variables) {
+        int b = 0;
+        for (HalfEdgeCIter he = mesh.halfEdges.begin(); he != mesh.halfEdges.end(); he++) {
+            if (!he->onBoundary) angles[he->index] = he->angle() + corrections[b++];
+            else angles[he->index] = 0.0;
+        }
+        if (b != variables) return false;
+        for (EdgeCIter e = mesh.edges.begin(); e != mesh.edges.end(); e++) {
+            HalfEdgeCIter he = e->he;
+            thetas[e->index] = M_PI - angles[he->index] - angles[he->flip->index];
+        }
+        return true;
+    }
+#endif
     QPsolver::MinNormBoxQPOptions opts;
     opts.admmMaxIters = 250;
     opts.cgMaxIters = 120;

@@ -44,6 +44,9 @@ public:
 
     /** Per-face reference direction of the input cross field (rows = faces, cols = 3). */
     void setCrossField(const Eigen::MatrixXd& dirs) override;
+
+    /** Per-vertex parameter coordinates before the final unit-square scaling. */
+    const Eigen::MatrixXd& chartUV() const { return chartUV_; }
     void setSmoothIterations(int iters);
     void setRequirePureQuads(bool pureQuads);
 
@@ -149,6 +152,7 @@ protected:
     Eigen::VectorXi matching;
     Eigen::VectorXd layerShift;
     Eigen::MatrixXd UV;
+    Eigen::MatrixXd chartUV_;
 
     std::vector<Edge> edgeList;
     std::vector<CutPath> cutPaths;
