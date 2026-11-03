@@ -15,8 +15,13 @@
 #    make remove-orphan-wasm     Remove orphaned embind .wasm/.js outputs
 
 # ========== Configuration ==========
-EIGEN_PATH := ../../deps/eigen-3.4.0
-OUTPUT_DIR := ../../../assets/wasm
+# The parameterization repo used to live in <site>/cpp/. It now sits beside the site.
+SITE_ROOT := $(abspath ../../lixiongguo.github.io)
+ifeq ($(wildcard $(SITE_ROOT)/assets),)
+  SITE_ROOT := $(abspath ../../..)
+endif
+EIGEN_PATH := $(SITE_ROOT)/cpp/deps/eigen-3.4.0
+OUTPUT_DIR := $(SITE_ROOT)/assets/wasm
 
 CXX       := em++
 # EIGEN_STACK_ALLOCATION_LIMIT=0：Eigen 的 ei_declare_aligned_stack_constructed_variable
