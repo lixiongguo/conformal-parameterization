@@ -159,7 +159,22 @@ EMSCRIPTEN_KEEPALIVE
 int get_vertex_count() { return g_ready ? static_cast<int>(g_rest.rows()) : 0; }
 
 EMSCRIPTEN_KEEPALIVE
-double* get_uv_ptr() { return g_ready ? g_uv.data() : nullptr; }
+double* get_uv_ptr() {
+    if (!g_ready || g_uv.size() == 0) return nullptr;
+    // g_uv 是 Eigen 矩阵，默认列优先存储；直接交 data() 会让网页按 [x0,y0,x1,y1]
+    // 的顺序读成错位的顶点。这里统一拷成交错数组，网页按顺序读即可。
+    static std::vector<double> interleaved;
+    const bool vertex_major = (g_uv.cols() == 2);
+    const int nV = static_cast<int>(vertex_major ? g_uv.rows() : g_uv.cols());
+    interleaved.resize(static_cast<size_t>(nV) * 2);
+    for (int i = 0; i < nV; ++i) {
+        const double x = vertex_major ? g_uv(i, 0) : g_uv(0, i);
+        const double y = vertex_major ? g_uv(i, 1) : g_uv(1, i);
+        interleaved[static_cast<size_t>(2 * i)] = x;
+        interleaved[static_cast<size_t>(2 * i + 1)] = y;
+    }
+    return interleaved.data();
+}
 
 EMSCRIPTEN_KEEPALIVE
 double get_max_distortion() { return g_max_distortion; }
