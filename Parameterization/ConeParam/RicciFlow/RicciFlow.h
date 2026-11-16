@@ -3,7 +3,6 @@
 
 #include "ConeParameterization.h"
 #include "Solver.h"
-#include <stack>
 #include <unordered_map>
 #include <vector>
 
@@ -58,9 +57,7 @@ protected:
     // optimize radii using solver
     bool optimizeRadii();
     
-    // BFS layout to determine UV coordinates
-    void performFaceLayout(HalfEdgeCIter he, const Eigen::Vector2d& dir,
-                           std::unordered_map<int, bool>& visited, std::stack<EdgeCIter>& stack);
+    // UV from the circle-packing edge lengths. Each vertex is placed once.
     void setUVs();
 
     // member variables

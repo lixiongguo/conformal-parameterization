@@ -55,6 +55,10 @@ public:
     void clearConeSingulars();
 
 protected:
+    // Lay out UV from edge lengths. Each vertex is written once, on the left
+    // of a directed edge, so an earlier triangle is not torn by a later face.
+    void layoutIntrinsicMetric(const Eigen::VectorXd& edgeLengths);
+
     // vertex_index → target_angle_sum (e.g. 4π, 6π)
     std::unordered_map<int, double> coneSingulars;
 };

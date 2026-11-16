@@ -794,47 +794,106 @@ bool IncrementalFlattening::buildCutMesh()
         vtxOnSeam[edges[ei].v1] = 1;
     }
 
+    // Faces that stay connected without crossing a seam share one sheet.
+    // Crossing used to flip a 2-coloring even when the path did not separate
+    // the disk, so the cut stayed glued and the UV folded.
     cm.sheetOfFace.assign(nF, -1);
-    std::queue<std::pair<int, int>> fq;
-    cm.sheetOfFace[0] = 0;
-    fq.push({0, 0});
-
-    std::vector<std::vector<std::pair<int, int>>> faceAdj(nF);
+    std::vector<std::vector<int>> faceAdj(nF);
     for (int ei = 0; ei < nE; ++ei) {
         const EdgeInfo& e = edges[ei];
-        if (!e.isInterior()) continue;
-        faceAdj[e.f0].push_back({e.f1, ei});
-        faceAdj[e.f1].push_back({e.f0, ei});
+        if (!e.isInterior() || m_isSeamEdge[ei]) continue;
+        if (e.f0 < 0 || e.f1 < 0) continue;
+        faceAdj[e.f0].push_back(e.f1);
+        faceAdj[e.f1].push_back(e.f0);
+    }
+    int nextSheet = 0;
+    for (int seed = 0; seed < nF; ++seed) {
+        if (cm.sheetOfFace[seed] >= 0) continue;
+        std::queue<int> fq;
+        cm.sheetOfFace[seed] = nextSheet;
+        fq.push(seed);
+        while (!fq.empty()) {
+            const int f = fq.front();
+            fq.pop();
+            for (int g : faceAdj[f]) {
+                if (g < 0 || g >= nF || cm.sheetOfFace[g] >= 0) continue;
+                cm.sheetOfFace[g] = nextSheet;
+                fq.push(g);
+            }
+        }
+        ++nextSheet;
     }
 
-    while (!fq.empty()) {
-        const int f = fq.front().first;
-        const int s = fq.front().second;
-        fq.pop();
-        for (const auto& nb : faceAdj[f]) {
-            const int g = nb.first;
-            const int ei = nb.second;
-            if (g < 0 || g >= nF) continue;
-            if (cm.sheetOfFace[g] >= 0) continue;
-            const int ns = m_isSeamEdge[ei] ? (1 - s) : s;
-            cm.sheetOfFace[g] = ns;
-            fq.push({g, ns});
+    // Split each vertex into one copy per wedge between seam edges.
+    std::vector<int> cornerSector(static_cast<size_t>(nF * 3), 0);
+    std::map<int, int> meshFaceToCompact;
+    int compact = 0;
+    for (FaceCIter f = mesh.faces.begin(); f != mesh.faces.end(); ++f) {
+        if (f->isBoundary()) continue;
+        meshFaceToCompact[f->index] = compact++;
+    }
+    for (int vi = 0; vi < nV; ++vi) {
+        Vertex& vert = mesh.vertices[vi];
+        if (vert.isIsolated()) continue;
+
+        struct Step {
+            int face = -1;
+            int corner = -1;
+            bool seam = false;
+        };
+        std::vector<Step> ring;
+        HalfEdgeIter h = vert.he;
+        int guard = 0;
+        do {
+            Step step;
+            const int nb = h->next->vertex->index;
+            const int ei = findEdge(vi, nb);
+            step.seam = ei >= 0 && ei < nE && m_isSeamEdge[ei] != 0;
+            if (!h->onBoundary) {
+                const auto it = meshFaceToCompact.find(h->face->index);
+                if (it != meshFaceToCompact.end()) {
+                    step.face = it->second;
+                    for (int c = 0; c < 3; ++c) {
+                        if (F[step.face * 3 + c] == vi) step.corner = c;
+                    }
+                }
+            }
+            ring.push_back(step);
+            h = h->flip->next;
+            if (++guard > nV + nF) break;
+        } while (h != vert.he);
+
+        int seamAt = -1;
+        for (int i = 0; i < static_cast<int>(ring.size()); ++i) {
+            if (ring[i].seam) {
+                seamAt = i;
+                break;
+            }
+        }
+        if (seamAt < 0 || ring.empty()) continue;
+
+        int sector = 0;
+        const int nRing = static_cast<int>(ring.size());
+        int idx = (seamAt + 1) % nRing;
+        for (int k = 0; k < nRing; ++k) {
+            const Step& step = ring[idx];
+            if (step.face >= 0 && step.corner >= 0) {
+                cornerSector[static_cast<size_t>(step.face * 3 + step.corner)] = sector;
+            }
+            if (step.seam) ++sector;
+            idx = (idx + 1) % nRing;
         }
     }
-    for (int f = 0; f < nF; ++f) {
-        if (cm.sheetOfFace[f] < 0) cm.sheetOfFace[f] = 0;
-    }
 
-    std::map<std::pair<int, int>, int> vtxSheetToCut;
+    std::map<std::pair<int, int>, int> vtxSectorToCut;
     cm.cutPos.resize(std::max(nV * 2, 1), 3);
     int cutCount = 0;
-    auto getCutVert = [&](int origV, int sheet) -> int {
+    auto getCutVert = [&](int origV, int sector) -> int {
         if (origV < 0 || origV >= nV) return -1;
-        const bool seamInterior = vtxOnSeam[origV] && !isMeshBoundaryVertex(origV);
-        const int s = seamInterior ? sheet : 0;
+        const int s = vtxOnSeam[origV] ? sector : 0;
         const std::pair<int, int> key{origV, s};
-        auto it = vtxSheetToCut.find(key);
-        if (it != vtxSheetToCut.end()) return it->second;
+        auto it = vtxSectorToCut.find(key);
+        if (it != vtxSectorToCut.end()) return it->second;
 
         const int idx = cutCount++;
         if (idx >= cm.cutPos.rows()) cm.cutPos.conservativeResize(idx + nV, 3);
@@ -843,23 +902,7 @@ bool IncrementalFlattening::buildCutMesh()
         cm.cutUV.push_back(mesh.vertices[origV].uv);
         cm.isCutBoundary.push_back(isMeshBoundaryVertex(origV));
         cm.cutPos.row(idx) = V.row(origV);
-        vtxSheetToCut[key] = idx;
-
-        if (seamInterior) {
-            const int otherSheet = 1 - s;
-            const std::pair<int, int> key2{origV, otherSheet};
-            if (vtxSheetToCut.count(key2) == 0) {
-                const int idx2 = cutCount++;
-                if (idx2 >= cm.cutPos.rows()) cm.cutPos.conservativeResize(idx2 + nV, 3);
-                cm.origVert.push_back(origV);
-                cm.seamMate.push_back(idx);
-                cm.cutUV.push_back(mesh.vertices[origV].uv);
-                cm.isCutBoundary.push_back(false);
-                cm.cutPos.row(idx2) = V.row(origV);
-                vtxSheetToCut[key2] = idx2;
-                cm.seamMate[idx] = idx2;
-            }
-        }
+        vtxSectorToCut[key] = idx;
         return idx;
     };
 
@@ -867,10 +910,9 @@ bool IncrementalFlattening::buildCutMesh()
     cm.faceOrig.resize(nF);
     for (int f = 0; f < nF; ++f) {
         cm.faceOrig[f] = f;
-        const int sheet = cm.sheetOfFace[f];
         for (int k = 0; k < 3; ++k) {
             const int ov = F[f * 3 + k];
-            cm.cutFaces[f * 3 + k] = getCutVert(ov, sheet);
+            cm.cutFaces[f * 3 + k] = getCutVert(ov, cornerSector[static_cast<size_t>(f * 3 + k)]);
         }
     }
 
@@ -1292,21 +1334,46 @@ void IncrementalFlattening::projectCutUVToMesh()
 {
     const CutMesh& cm = m_cutMesh;
     std::vector<char> assigned(nV, 0);
-    for (int f = 0; f < cm.nCutFaces; ++f) {
-        if (cm.sheetOfFace[f] != 0) continue;
+    std::vector<char> seen(static_cast<size_t>(std::max(nF, 0)), 0);
+    std::vector<std::vector<int>> adj(static_cast<size_t>(std::max(nF, 0)));
+    for (int ei = 0; ei < nE; ++ei) {
+        if (!edges[ei].isInterior() || m_isSeamEdge[ei]) continue;
+        const int a = edges[ei].f0;
+        const int b = edges[ei].f1;
+        if (a < 0 || b < 0 || a >= nF || b >= nF) continue;
+        adj[a].push_back(b);
+        adj[b].push_back(a);
+    }
+
+    auto take = [&](int f) {
+        if (f < 0 || f >= cm.nCutFaces) return;
         for (int k = 0; k < 3; ++k) {
             const int cv = cm.cutFaces[f * 3 + k];
+            if (cv < 0 || cv >= static_cast<int>(cm.origVert.size())) continue;
             const int ov = cm.origVert[cv];
-            if (ov < 0 || ov >= nV) continue;
+            if (ov < 0 || ov >= nV || assigned[ov]) continue;
             mesh.vertices[ov].uv = cm.cutUV[cv];
             assigned[ov] = 1;
         }
+    };
+
+    std::queue<int> q;
+    if (nF > 0) {
+        q.push(0);
+        seen[0] = 1;
     }
-    for (int cv = 0; cv < cm.nCutVerts; ++cv) {
-        const int ov = cm.origVert[cv];
-        if (ov < 0 || ov >= nV || assigned[ov]) continue;
-        mesh.vertices[ov].uv = cm.cutUV[cv];
-        assigned[ov] = 1;
+    while (!q.empty()) {
+        const int f = q.front();
+        q.pop();
+        take(f);
+        for (int g : adj[f]) {
+            if (g < 0 || g >= nF || seen[g]) continue;
+            seen[g] = 1;
+            q.push(g);
+        }
+    }
+    for (int f = 0; f < nF; ++f) {
+        if (!seen[f]) take(f);
     }
 }
 

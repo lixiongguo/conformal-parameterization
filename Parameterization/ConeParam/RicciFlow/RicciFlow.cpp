@@ -278,61 +278,9 @@ bool RicciFlow::optimizeRadii()
     return true;
 }
 
-// ============================================================
-// UV Layout (BFS)
-// ============================================================
-
-void RicciFlow::performFaceLayout(HalfEdgeCIter he, const Eigen::Vector2d& dir,
-                                   std::unordered_map<int, bool>& visited, 
-                                   std::stack<EdgeCIter>& stack)
-{
-    if (!he->onBoundary) {
-        int fIdx = he->face->index;
-        if (visited.find(fIdx) == visited.end()) {
-            HalfEdgeCIter next = he->next;
-            HalfEdgeCIter prev = he->next->next;
-            
-            // Compute angle at current vertex
-            double angle = halfEdgeAngles[next->index];
-            Eigen::Vector2d newDir = {
-                cos(angle)*dir[0] - sin(angle)*dir[1],
-                sin(angle)*dir[0] + cos(angle)*dir[1]
-            };
-            
-            prev->vertex->uv = he->vertex->uv + newDir * edgeLengths[prev->edge->index];
-            
-            visited[fIdx] = true;
-            stack.push(next->edge);
-            stack.push(prev->edge);
-        }
-    }
-}
-
 void RicciFlow::setUVs()
 {
-    // Push any edge
-    std::stack<EdgeCIter> stack;
-    EdgeCIter e = mesh.edges.begin();
-    stack.push(e);
-    e->he->vertex->uv = Eigen::Vector2d::Zero();
-    e->he->next->vertex->uv = Eigen::Vector2d(edgeLengths[e->index], 0);
-    
-    // BFS layout
-    std::unordered_map<int, bool> visited;
-    while (!stack.empty()) {
-        EdgeCIter e = stack.top();
-        stack.pop();
-        
-        HalfEdgeCIter h1 = e->he;
-        HalfEdgeCIter h2 = h1->flip;
-        
-        Eigen::Vector2d dir = h2->vertex->uv - h1->vertex->uv;
-        dir.normalize();
-        
-        performFaceLayout(h1, dir, visited, stack);
-        performFaceLayout(h2, -dir, visited, stack);
-    }
-    
+    layoutIntrinsicMetric(edgeLengths);
     normalize();
 }
 

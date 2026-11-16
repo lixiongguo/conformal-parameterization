@@ -805,7 +805,10 @@ struct Batch {
     int selected = 0;
     int next = 0;
     int count = 0;
+    int jobs = 1;
+    int focus = 0;
     int finished = 0;
+    bool again = false;
 };
 
 Batch gBatch;
@@ -910,8 +913,21 @@ void beginBatchLocked() {
     gBatch.algo = gBatch.selected;
     gBatch.next = 0;
     gBatch.finished = 0;
+    gBatch.jobs = 1;
     gBatch.busy = true;
+    gBatch.again = false;
     gBatch.cv.notify_all();
+}
+
+void finishBatchJobLocked() {
+    ++gBatch.finished;
+    if (gBatch.finished < gBatch.jobs) return;
+    gBatch.busy = false;
+    const int slot = gBatch.selected * gBatch.count + gBatch.focus;
+    const bool have = gReady && gBatch.count > 0 && slot >= 0 &&
+                      gReady[static_cast<size_t>(slot)].load(std::memory_order_acquire) != 0;
+    if (!gBatch.quit && (gBatch.again || gBatch.selected != gBatch.algo) && !have) beginBatchLocked();
+    else gBatch.again = false;
 }
 
 void selectAlgo(int index) {
@@ -919,7 +935,12 @@ void selectAlgo(int index) {
     if (index < 0 || index >= kAlgoCount) return;
     if (index == gBatch.selected && !gBatch.busy) return;
     gBatch.selected = index;
+    const int slot = index * gBatch.count + gBatch.focus;
+    const bool have = gReady && gBatch.count > 0 &&
+                      gReady[static_cast<size_t>(slot)].load(std::memory_order_acquire) != 0;
+    if (have) return;
     if (!gBatch.busy) beginBatchLocked();
+    else gBatch.again = true;
 }
 
 Vec3 vecAdd(Vec3 a, Vec3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
@@ -1011,8 +1032,16 @@ Mat4 previewMvp(Vec3 center, float radius, float yaw, float pitch, float dist, f
     return matMul(projection, lookAt(eye, center, {0.f, 1.f, 0.f}));
 }
 
+float toolbarPoints() {
+    const float font = 16.f;
+    const float button = font + 12.f;
+    const float pad = 12.f;
+    const float gap = 8.f;
+    return pad + button + gap + button + gap + font + pad;
+}
+
 Rect panel3d() {
-    const float hud = kHud * gView.contentScale;
+    const float hud = toolbarPoints() * gView.contentScale;
     const float uvWidth = std::min(static_cast<float>(gView.fbW) * 0.42f, 680.f * gView.contentScale);
     return {0.f, hud, std::max(1.f, static_cast<float>(gView.fbW) - uvWidth),
             std::max(1.f, static_cast<float>(gView.fbH) - hud)};
@@ -1485,11 +1514,28 @@ void finishPaint() {
     }
 }
 
+void showModel(int index) {
+    if (!gModels || gModels->empty() || !gReady) return;
+    const int count = static_cast<int>(gModels->size());
+    index = (index % count + count) % count;
+    {
+        std::lock_guard<std::mutex> lock(gBatch.mu);
+        gBatch.focus = index;
+        const bool have = gReady[static_cast<size_t>(gBatch.selected * gBatch.count + index)].load(std::memory_order_acquire) != 0;
+        if (!have) {
+            if (!gBatch.busy) beginBatchLocked();
+            else if (gBatch.next > 0) gBatch.again = true;
+        }
+    }
+    openEditor(index);
+}
+
 void handleSeamCmd(SeamCmd cmd) {
     if (cmd == SeamCmd::Back) {
-        gEd.open = false;
+        gEd.pick = false;
         gEd.painting = false;
         gEd.orbit = false;
+        gEd.status = "拖拽旋转，滚轮缩放，C 选切割边。粉红线是当前切缝";
         return;
     }
     if (cmd == SeamCmd::Pick) {
@@ -1819,9 +1865,10 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
     if (imguiCapturesKeyboard()) return;
     if (action != GLFW_PRESS) return;
     if (gEd.open && key == GLFW_KEY_ESCAPE) {
-        gEd.open = false;
+        gEd.pick = false;
         gEd.painting = false;
         gEd.orbit = false;
+        gEd.status = "拖拽旋转，滚轮缩放，C 选切割边。粉红线是当前切缝";
         return;
     }
     if (gEd.open && key == GLFW_KEY_C) {
@@ -2111,10 +2158,11 @@ void workerLoop() {
         int algo = 0;
         {
             std::unique_lock<std::mutex> lock(gBatch.mu);
-            gBatch.cv.wait(lock, [] { return gBatch.quit || (gBatch.busy && gBatch.next < gBatch.count); });
+            gBatch.cv.wait(lock, [] { return gBatch.quit || (gBatch.busy && gBatch.next < gBatch.jobs); });
             if (gBatch.quit) return;
-            model = gBatch.next++;
+            model = gBatch.focus;
             algo = gBatch.algo;
+            ++gBatch.next;
         }
         const int slot = algo * gBatch.count + model;
         if (gReady[static_cast<size_t>(slot)].load(std::memory_order_acquire) == 0) {
@@ -2131,12 +2179,7 @@ void workerLoop() {
             }
             if (gEditOwns[static_cast<size_t>(model)].load(std::memory_order_acquire)) {
                 std::lock_guard<std::mutex> lock(gBatch.mu);
-                if (algo != gBatch.algo) continue;
-                ++gBatch.finished;
-                if (gBatch.finished >= gBatch.count) {
-                    gBatch.busy = false;
-                    if (!gBatch.quit && gBatch.selected != gBatch.algo) beginBatchLocked();
-                }
+                finishBatchJobLocked();
                 continue;
             }
             Cell solved = solveOne((*gModels)[static_cast<size_t>(model)], kAlgos[algo], customPtr);
@@ -2184,12 +2227,7 @@ void workerLoop() {
             }
         }
         std::lock_guard<std::mutex> lock(gBatch.mu);
-        if (algo != gBatch.algo) continue;
-        ++gBatch.finished;
-        if (gBatch.finished >= gBatch.count) {
-            gBatch.busy = false;
-            if (!gBatch.quit && gBatch.selected != gBatch.algo) beginBatchLocked();
-        }
+        finishBatchJobLocked();
     }
 }
 
@@ -2302,9 +2340,10 @@ int main(int argc, char** argv) {
     glfwSetCharCallback(window, imguiChar);
     imguiInit(window);
     glfwSetKeyCallback(window, keyCallback);
-    gRows = static_cast<int>(models.size());
+    gRows = 1;
     gYaw.assign(models.size(), 0.7f);
     gPitch.assign(models.size(), 0.35f);
+    openEditor(0);
 
     const char* vertexSource = R"GLSL(
       #version 330 core
@@ -2476,22 +2515,32 @@ int main(int argc, char** argv) {
             std::lock_guard<std::mutex> lock(gBatch.mu);
             selected = gBatch.selected;
         }
-        int done = 0;
-        for (int model = 0; model < modelCount; ++model) {
-            if (ready[static_cast<size_t>(selected * modelCount + model)].load(std::memory_order_acquire)) ++done;
-        }
-        std::string title = done >= modelCount
-            ? std::string("简单参数化  ") + algoName(kAlgos[selected])
-            : std::string("简单参数化  ") + algoName(kAlgos[selected]) + "  " + std::to_string(done) + "/" + std::to_string(modelCount);
-        if (gEd.open && gEd.model >= 0 && gEd.model < modelCount) {
-            title = std::string("切缝  ") + models[static_cast<size_t>(gEd.model)].label + "  " +
-                    std::to_string(gEd.seams.size()) + " 条";
-        }
+        const int shown = (gEd.model >= 0 && gEd.model < modelCount) ? gEd.model : 0;
+        const bool shownReady = ready[static_cast<size_t>(selected * modelCount + shown)].load(std::memory_order_acquire) != 0;
+        std::string title = models[static_cast<size_t>(shown)].label + "  " + algoName(kAlgos[selected]);
+        if (!shownReady) title += "  计算中";
         glfwSetWindowTitle(window, title.c_str());
+        if (shownReady && gEd.open && gEd.model == shown && !gEd.painting && gEd.history.empty()) {
+            bool userCut = false;
+            {
+                std::lock_guard<std::mutex> lock(gCutMu);
+                userCut = gCuts[static_cast<size_t>(shown)].user;
+            }
+            const Cell& arrived = cells[static_cast<size_t>(selected * modelCount + shown)];
+            if (!userCut && arrived.ok) {
+                std::set<std::pair<int, int>> incoming;
+                for (const auto& edge : arrived.seams) incoming.insert(canonEdge(edge.first, edge.second));
+                if (incoming != gEd.seams) {
+                    gEd.seams = std::move(incoming);
+                    gEd.autoSeams = seamVector(gEd.seams);
+                    gEd.lastCommitted = gEd.autoSeams;
+                }
+            }
+        }
 
         glViewport(0, 0, gView.fbW, gView.fbH);
         glDisable(GL_DEPTH_TEST);
-        glClearColor(0.955f, 0.949f, 0.935f, 1.f);
+        glClearColor(0.90f, 0.90f, 0.888f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glUseProgram(program);
         glUniform2f(viewLoc, gView.originX, gView.originY);
@@ -2716,6 +2765,9 @@ int main(int argc, char** argv) {
                         if (candidate.uploaded && candidate.surfCount > 0) paintedCell = &candidate;
                     }
                 }
+                std::vector<ScreenVert> meshBack;
+                appendRect(meshBack, view3d.x, view3d.y, view3d.w, view3d.h, 0.86f, 0.89f, 0.92f, 1.f);
+                drawScreen(meshBack, 1, 0);
                 glUseProgram(meshProgram);
                 const Mat4 mvp = meshMvp(view3d.w / std::max(view3d.h, 1.f));
                 glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, mvp.m);
@@ -2765,7 +2817,7 @@ int main(int argc, char** argv) {
                 glDisable(GL_SCISSOR_TEST);
             }
             std::vector<ScreenVert> uvBack;
-            appendRect(uvBack, viewUv.x, viewUv.y, viewUv.w, viewUv.h, 1.f, 1.f, 1.f, 1.f);
+            appendRect(uvBack, viewUv.x, viewUv.y, viewUv.w, viewUv.h, 0.96f, 0.96f, 0.94f, 1.f);
             drawScreen(uvBack, 1, 0);
             const float cardH = 156.f * gView.contentScale;
             const float chartY = viewUv.y + cardH;
@@ -2807,45 +2859,96 @@ int main(int argc, char** argv) {
                 uvNote = "正在按切缝重新展开";
             }
         }
-        std::string hudText = gEd.open
-            ? gEd.status
-            : (done >= modelCount ? (gQuality == QualityView::Area
-                                       ? "面积畸变 · 已去整体缩放 · 绿1 红≥1.5 · 黄=翻转"
-                                       : gQuality == QualityView::Conformal
-                                             ? "共形畸变 K=σ1/σ2 · 绿1 红≥1.5 · 黄=翻转"
-                                             : "棋盘格 · 粉线是切缝 · 黄=翻转")
-                                  : ("正在计算 " + std::to_string(done) + " / " + std::to_string(modelCount)));
-        if (!gEd.open && done >= modelCount) hudText += "    拖动平移 · F 适配";
+        const Cell& shownCell = cells[static_cast<size_t>(selected * modelCount + shown)];
+        std::string hudText = "正在展开当前模型";
+        if (shownReady && gEd.pick) hudText = gEd.status;
+        else if (shownReady && !shownCell.ok) hudText = shownCell.note.empty() ? "展开失败" : shownCell.note;
+        else if (shownReady) {
+            hudText = std::string(algoName(kAlgos[selected])) + " · " +
+                      std::to_string(std::llround(shownCell.seconds * 1000.0)) + " ms · 翻转 " +
+                      std::to_string(shownCell.flipped);
+            if (!shownCell.cutTag.empty()) hudText += " · " + shownCell.cutTag;
+            if (!gEd.status.empty() && gEd.status.rfind("拖拽", 0) != 0) hudText = gEd.status;
+        }
+        std::string modelLabel = models[static_cast<size_t>(shown)].label;
+        const auto dot = modelLabel.rfind(".obj");
+        if (dot != std::string::npos) modelLabel.erase(dot, 4);
         imguiBegin();
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.f, 12.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.f, 6.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 7.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.f, 8.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.975f, 0.972f, 0.964f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.84f, 0.835f, 0.816f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.f, 1.f, 1.f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.955f, 0.953f, 0.945f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.91f, 0.905f, 0.89f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.14f, 0.15f, 0.17f, 1.f));
         ImGui::SetNextWindowPos(ImVec2(0.f, 0.f));
-        ImGui::SetNextWindowSize(ImVec2(static_cast<float>(gView.fbW) / pointScale, kHud));
+        ImGui::SetNextWindowSize(ImVec2(static_cast<float>(gView.fbW) / pointScale, toolbarPoints()));
         ImGui::Begin("工具", nullptr,
-                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-        if (gEd.open) {
-            if (ImGui::Button("返回")) handleSeamCmd(SeamCmd::Back);
-            ImGui::SameLine();
-            if (ImGui::Button(gEd.pick ? "结束选边" : "选切割边")) handleSeamCmd(SeamCmd::Pick);
-            ImGui::SameLine();
-            if (ImGui::Button("抽取主干")) handleSeamCmd(SeamCmd::Trunk);
-            ImGui::SameLine();
-            if (ImGui::Button("清空")) handleSeamCmd(SeamCmd::Clear);
-            ImGui::SameLine();
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        ImGui::SetWindowFontScale(1.f / pointScale);
+        auto darkButton = [](const char* label) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.18f, 0.22f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.28f, 0.33f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.09f, 0.11f, 0.14f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.98f, 0.96f, 1.f));
+            const bool pressed = ImGui::Button(label);
+            ImGui::PopStyleColor(4);
+            return pressed;
+        };
+        auto toggleButton = [&](const char* label, bool on) { return on ? darkButton(label) : ImGui::Button(label); };
+        if (ImGui::Button("<##prev")) showModel(shown - 1);
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(modelLabel.c_str());
+        ImGui::SameLine();
+        if (ImGui::Button(">##next")) showModel(shown + 1);
+        ImGui::SameLine(0.f, 20.f);
+        for (int index = 0; index < kAlgoCount; ++index) {
+            if (index > 0) ImGui::SameLine();
+            if (toggleButton(algoName(kAlgos[index]), index == selected)) selectAlgo(index);
         }
-        ImGui::SetNextItemWidth(170.f);
-        if (ImGui::BeginCombo("算法", algoName(kAlgos[selected]))) {
-            for (int index = 0; index < kAlgoCount; ++index) {
-                if (ImGui::Selectable(algoName(kAlgos[index]), index == selected)) selectAlgo(index);
+        if (toggleButton("棋盘格", gQuality == QualityView::Checker)) gQuality = QualityView::Checker;
+        ImGui::SameLine();
+        if (toggleButton("共形畸变", gQuality == QualityView::Conformal)) gQuality = QualityView::Conformal;
+        ImGui::SameLine();
+        if (toggleButton("面积畸变", gQuality == QualityView::Area)) gQuality = QualityView::Area;
+        ImGui::SameLine(0.f, 20.f);
+        if (toggleButton(gEd.pick ? "结束选边" : "选切割边", gEd.pick)) handleSeamCmd(SeamCmd::Pick);
+        ImGui::SameLine();
+        if (ImGui::Button("抽取主干")) handleSeamCmd(SeamCmd::Trunk);
+        ImGui::SameLine();
+        if (ImGui::Button("清空")) handleSeamCmd(SeamCmd::Clear);
+        const float legendReserve = 72.f;
+        const float statusWidth = std::max(40.f, ImGui::GetContentRegionAvail().x - legendReserve);
+        std::string status = hudText;
+        if (ImGui::CalcTextSize(status.c_str()).x > statusWidth) {
+            const std::string ellipsis = "…";
+            while (!status.empty() && ImGui::CalcTextSize((status + ellipsis).c_str()).x > statusWidth) {
+                status.pop_back();
+                while (!status.empty() && (static_cast<unsigned char>(status.back()) & 0xC0) == 0x80) status.pop_back();
             }
-            ImGui::EndCombo();
+            status += ellipsis;
         }
-        ImGui::SameLine();
-        const char* viewNames[] = {"棋盘格", "共形畸变", "面积畸变"};
-        int quality = static_cast<int>(gQuality);
-        ImGui::SetNextItemWidth(130.f);
-        if (ImGui::Combo("显示", &quality, viewNames, 3)) gQuality = static_cast<QualityView>(quality);
-        ImGui::SameLine();
-        ImGui::TextUnformatted(hudText.c_str());
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.40f, 0.42f, 0.45f, 1.f));
+        ImGui::TextUnformatted(status.c_str());
+        ImGui::PopStyleColor();
+        ImDrawList* barDraw = ImGui::GetWindowDrawList();
+        const ImVec2 legend(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - legendReserve, ImGui::GetItemRectMin().y);
+        barDraw->AddCircleFilled(ImVec2(legend.x + 4.f, legend.y + ImGui::GetFontSize() * 0.5f), 4.f, IM_COL32(255, 59, 107, 255), 16);
+        barDraw->AddText(ImVec2(legend.x + 14.f, legend.y), IM_COL32(92, 84, 88, 255), "切缝");
+        const ImVec2 bar = ImGui::GetWindowPos();
+        barDraw->AddLine(ImVec2(bar.x, bar.y + ImGui::GetWindowHeight() - 1.f),
+                         ImVec2(bar.x + ImGui::GetWindowWidth(), bar.y + ImGui::GetWindowHeight() - 1.f),
+                         IM_COL32(214, 212, 206, 255), 1.f);
         ImGui::End();
+        ImGui::PopStyleColor(6);
+        ImGui::PopStyleVar(6);
         ImDrawList* overlay = ImGui::GetForegroundDrawList();
         for (const CellLabel& label : labels) {
             overlay->PushClipRect(label.clip0, label.clip1, true);
@@ -2858,6 +2961,7 @@ int main(int argc, char** argv) {
             ImGui::SetNextWindowSize(ImVec2(viewUv.w / pointScale, 156.f));
             ImGui::Begin("公式", nullptr,
                          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+            ImGui::SetWindowFontScale(1.f / pointScale);
             ImGui::TextUnformatted(editorFormula.title);
             ImGui::TextWrapped("%s", editorFormula.body);
             ImGui::End();

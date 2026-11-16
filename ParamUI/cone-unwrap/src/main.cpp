@@ -54,6 +54,9 @@ int gScheme = NEWTON;
 Texture gTexture = Texture::Checker;
 bool gPickCones = false;
 bool gShowExtra = false;
+bool gShowCircles = false;
+bool gShowEdges = false;
+bool gShowFlips = false;
 bool gAutoRun = true;
 bool gHasResult = false;
 bool gDrag = false;
@@ -68,7 +71,7 @@ double gSeconds = 0;
 int gFlips = 0;
 int gWidth = 1440, gHeight = 860;
 float gScale = 1.f;
-std::vector<DrawVertex> gTriangles, gUvTriangles, gFlipTris, gFlips3d, gConeMarks;
+std::vector<DrawVertex> gTriangles, gUvTriangles, gFlipTris, gFlips3d, gConeMarks, gCircles, gEdges;
 bool gSolving = false;
 bool gUnfoldNow = false;
 GLFWwindow* gWindow = nullptr;
@@ -372,6 +375,8 @@ void rebuildGeometry() {
     gFlips3d.clear();
     gConeMarks.clear();
     gFlips = 0;
+    gCircles.clear();
+    gEdges.clear();
     std::vector<Eigen::Vector3d> distortion(gMesh.vertices.size(), Eigen::Vector3d(0.55, 0.62, 0.72));
     if (gHasResult && gTexture == Texture::Distortion) {
         std::vector<double> weight(gMesh.vertices.size(), 0);
@@ -419,7 +424,7 @@ void rebuildGeometry() {
             if (gHasResult) {
                 push(gUvTriangles, Eigen::Vector3d(verts[corner]->uv.x(), verts[corner]->uv.y(), 0),
                      Eigen::Vector3d(0, 0, 1), verts[corner]->uv, color);
-                if (flipped) {
+                if (flipped && gShowFlips) {
                     push(gFlipTris, Eigen::Vector3d(verts[corner]->uv.x(), verts[corner]->uv.y(), 0.001),
                          Eigen::Vector3d(0, 0, 1), verts[corner]->uv, Eigen::Vector3d(0.95, 0.78, 0.15));
                     push(gFlips3d, positions[corner] + normal * 0.002, normal, verts[corner]->uv,
@@ -432,6 +437,61 @@ void rebuildGeometry() {
         if (cone.first < 0 || cone.first >= static_cast<int>(gMesh.vertices.size())) continue;
         const Eigen::Vector3d p = gMesh.vertices[cone.first].position;
         push(gConeMarks, p, Eigen::Vector3d(0, 1, 0), Eigen::Vector2d::Zero(), Eigen::Vector3d(0.85, 0.2, 0.15));
+    }
+    const bool drawCircles = gShowCircles && gMethod == Method::Circle;
+    if ((!drawCircles && !gShowEdges) || gMesh.vertices.empty()) return;
+
+    Eigen::Vector3d lo = gMesh.vertices[0].position, hi = lo;
+    for (VertexCIter vertex = gMesh.vertices.begin(); vertex != gMesh.vertices.end(); ++vertex) {
+        lo = lo.cwiseMin(vertex->position);
+        hi = hi.cwiseMax(vertex->position);
+    }
+    const double diagonal = std::max((hi - lo).norm(), 1e-8);
+    const double radiusLimit = 0.35 * diagonal;
+    const double lift = diagonal * 0.0015;
+    if (gShowEdges) {
+        const Eigen::Vector3d edgeInk(0.12, 0.13, 0.15);
+        for (EdgeCIter edge = gMesh.edges.begin(); edge != gMesh.edges.end(); ++edge) {
+            HalfEdgeCIter he = edge->he;
+            if (he->onBoundary) he = he->flip;
+            Eigen::Vector3d na = he->vertex->normal();
+            Eigen::Vector3d nb = he->next->vertex->normal();
+            if (na.squaredNorm() < 1e-12) na = he->face->normal();
+            if (nb.squaredNorm() < 1e-12) nb = he->face->normal();
+            push(gEdges, he->vertex->position + lift * na, na, Eigen::Vector2d::Zero(), edgeInk);
+            push(gEdges, he->next->vertex->position + lift * nb, nb, Eigen::Vector2d::Zero(), edgeInk);
+        }
+    }
+    if (!drawCircles) return;
+    constexpr int kSegments = 28;
+    const Eigen::Vector3d ink(0.08, 0.22, 0.52);
+    for (FaceCIter face = gMesh.faces.begin(); face != gMesh.faces.end(); ++face) {
+        if (face->isBoundary()) continue;
+        HalfEdgeCIter he = face->he;
+        const Eigen::Vector3d a = he->vertex->position;
+        const Eigen::Vector3d b = he->next->vertex->position;
+        const Eigen::Vector3d c = he->next->next->vertex->position;
+        const Eigen::Vector3d ab = b - a;
+        const Eigen::Vector3d ac = c - a;
+        const Eigen::Vector3d n = ab.cross(ac);
+        const double n2 = n.squaredNorm();
+        if (n2 < 1e-18) continue;
+        const Eigen::Vector3d center = a + (n.cross(ab) * ac.squaredNorm() + ac.cross(n) * ab.squaredNorm()) / (2.0 * n2);
+        const double radius = (center - a).norm();
+        if (!std::isfinite(radius) || radius < 1e-8 || radius > radiusLimit) continue;
+        const Eigen::Vector3d normal = n / std::sqrt(n2);
+        Eigen::Vector3d tangent = b - center;
+        if (tangent.squaredNorm() < 1e-18) continue;
+        tangent.normalize();
+        const Eigen::Vector3d bitangent = normal.cross(tangent);
+        for (int step = 0; step < kSegments; ++step) {
+            const double t0 = 2.0 * M_PI * static_cast<double>(step) / kSegments;
+            const double t1 = 2.0 * M_PI * static_cast<double>(step + 1) / kSegments;
+            const Eigen::Vector3d p0 = center + radius * (std::cos(t0) * tangent + std::sin(t0) * bitangent) + lift * normal;
+            const Eigen::Vector3d p1 = center + radius * (std::cos(t1) * tangent + std::sin(t1) * bitangent) + lift * normal;
+            push(gCircles, p0, normal, Eigen::Vector2d::Zero(), ink);
+            push(gCircles, p1, normal, Eigen::Vector2d::Zero(), ink);
+        }
     }
 }
 
@@ -525,7 +585,21 @@ struct Panel {
     float x, y, w, h;
 };
 
-float toolbarHeight() { return gShowExtra ? 118.f : 86.f; }
+float uiScale() {
+    float x = 1.f, y = 1.f;
+    if (GLFWwindow* window = glfwGetCurrentContext()) glfwGetWindowContentScale(window, &x, &y);
+    return std::max(1.f, 0.5f * (x + y));
+}
+
+float toolbarHeight() {
+    const float font = 16.f;
+    const float button = font + 12.f;
+    const float pad = 12.f;
+    const float gap = 8.f;
+    float height = pad + button + gap + font + pad;
+    if (gShowExtra) height += gap + button;
+    return height;
+}
 
 Panel leftPanel() {
     const float top = toolbarHeight();
@@ -647,8 +721,18 @@ void clickButton(int id) {
         gSeconds = 0;
         gFlips = 0;
         gStatus = "已清除展开结果。锥点还在，点「展开」再算。";
-    } else if (id == 50) gTexture = Texture::Checker;
+    }     else if (id == 50) gTexture = Texture::Checker;
     else if (id == 51) gTexture = Texture::Distortion;
+    else if (id == 52) {
+        gShowCircles = !gShowCircles;
+        if (gShowCircles) gStatus = "圆画在左侧原网格上，每个三角面一个外接圆。";
+    } else if (id == 53) {
+        gShowEdges = !gShowEdges;
+        if (gShowEdges) gStatus = "边画在左侧原网格上。";
+    } else if (id == 54) {
+        gShowFlips = !gShowFlips;
+        if (gShowFlips) gStatus = "黄色三角面是翻转的面。";
+    }
     if (id != 40) rebuildGeometry();
 }
 
@@ -680,6 +764,7 @@ void main(){
    color = vec3(cell);
  }
  if(uShade==3) color = vec3(0.95,0.78,0.15);
+ if(uShade==4){ frag = vec4(vCol, 1.0); return; }
  frag = vec4(color * light, 1.0);
 })";
     gProgram = glCreateProgram();
@@ -690,7 +775,10 @@ void main(){
     glGenBuffers(1, &gBuffer);
 }
 
-void drawMesh(const std::vector<DrawVertex>& vertices, const Mat4& mvp, int shade, float pointSize) {
+enum class MeshDraw { Triangles, Points, Lines };
+
+void drawMesh(const std::vector<DrawVertex>& vertices, const Mat4& mvp, int shade, float pointSize,
+              MeshDraw mode = MeshDraw::Triangles) {
     if (vertices.empty()) return;
     glUseProgram(gProgram);
     glUniformMatrix4fv(glGetUniformLocation(gProgram, "uMvp"), 1, GL_FALSE, mvp.m);
@@ -710,9 +798,11 @@ void drawMesh(const std::vector<DrawVertex>& vertices, const Mat4& mvp, int shad
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(24));
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(32));
-    if (pointSize > 0) {
+    if (mode == MeshDraw::Points) {
         glPointSize(pointSize);
         glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(vertices.size()));
+    } else if (mode == MeshDraw::Lines) {
+        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(vertices.size()));
     } else {
         glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices.size()));
     }
@@ -735,61 +825,136 @@ Mat4 uvMatrix(const Panel& panel) {
     return ortho(cx - span * aspect, cx + span * aspect, cy - span, cy + span);
 }
 
-bool toolButton(const char* label, bool on) {
-    if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.82f, 0.95f, 1.f));
+std::string modelTitle() {
+    if (gModels.empty()) return "没有模型";
+    std::string label = gModels[gModel].label;
+    const auto dot = label.rfind(".obj");
+    if (dot != std::string::npos) label.erase(dot, 4);
+    return label;
+}
+
+std::string fitText(const std::string& text, float maxWidth) {
+    if (ImGui::CalcTextSize(text.c_str()).x <= maxWidth) return text;
+    std::string cut = text;
+    const std::string ellipsis = "…";
+    while (!cut.empty() && ImGui::CalcTextSize((cut + ellipsis).c_str()).x > maxWidth) {
+        cut.pop_back();
+        while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0) == 0x80) cut.pop_back();
+    }
+    return cut + ellipsis;
+}
+
+bool darkButton(const char* label) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.18f, 0.22f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.28f, 0.33f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.09f, 0.11f, 0.14f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.98f, 0.96f, 1.f));
     const bool pressed = ImGui::Button(label);
-    if (on) ImGui::PopStyleColor();
+    ImGui::PopStyleColor(4);
     return pressed;
+}
+
+bool toggleButton(const char* label, bool on) {
+    return on ? darkButton(label) : ImGui::Button(label);
+}
+
+void drawPanelTag(const Panel& panel, const char* text) {
+    ImFont* font = ImGui::GetFont();
+    const float size = 14.f;
+    const ImVec2 textSize = font->CalcTextSizeA(size, 10000.f, 0.f, text);
+    const ImVec2 pos(panel.x + 14.f, panel.y + 12.f);
+    ImDrawList* draw = ImGui::GetForegroundDrawList();
+    draw->AddRectFilled(ImVec2(pos.x - 8.f, pos.y - 4.f), ImVec2(pos.x + textSize.x + 8.f, pos.y + textSize.y + 4.f),
+                        IM_COL32(255, 255, 255, 228), 5.f);
+    draw->AddText(font, size, pos, IM_COL32(48, 52, 58, 255), text);
 }
 
 void drawInterface() {
     imguiBegin();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.f, 12.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.f, 6.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 7.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.f, 8.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.975f, 0.972f, 0.964f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.84f, 0.835f, 0.816f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.f, 1.f, 1.f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.955f, 0.953f, 0.945f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.91f, 0.905f, 0.89f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.14f, 0.15f, 0.17f, 1.f));
     ImGui::SetNextWindowPos(ImVec2(0.f, 0.f));
     ImGui::SetNextWindowSize(ImVec2(static_cast<float>(gWidth), toolbarHeight()));
-    ImGui::Begin("工具", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-    if (ImGui::Button("<")) clickButton(1);
+    ImGui::Begin("工具", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::SetWindowFontScale(1.f / uiScale());
+
+    if (ImGui::Button("<##prev")) clickButton(1);
     ImGui::SameLine();
-    ImGui::TextUnformatted(gModels.empty() ? "没有模型" : gModels[gModel].label.c_str());
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(modelTitle().c_str());
     ImGui::SameLine();
-    if (ImGui::Button(">")) clickButton(2);
+    if (ImGui::Button(">##next")) clickButton(2);
+    ImGui::SameLine(0.f, 20.f);
+    if (darkButton("展开")) clickButton(40);
     ImGui::SameLine();
-    if (toolButton("Circle Pattern", gMethod == Method::Circle)) clickButton(10);
+    if (ImGui::Button("清除")) clickButton(41);
+    ImGui::SameLine(0.f, 20.f);
+    if (toggleButton("Circle", gMethod == Method::Circle)) clickButton(10);
     ImGui::SameLine();
-    if (toolButton("CETM", gMethod == Method::Cetm)) clickButton(11);
+    if (toggleButton("CETM", gMethod == Method::Cetm)) clickButton(11);
     ImGui::SameLine();
-    if (toolButton("Ricci 流", gMethod == Method::Ricci)) clickButton(12);
+    if (toggleButton("Ricci", gMethod == Method::Ricci)) clickButton(12);
     ImGui::SameLine();
-    if (toolButton("Incremental Flattening", gMethod == Method::Incremental)) clickButton(13);
+    if (toggleButton("增量摊平", gMethod == Method::Incremental)) clickButton(13);
+    if (gMethod == Method::Circle) {
+        ImGui::SameLine(0.f, 20.f);
+        if (toggleButton("圆图案", gShowCircles)) clickButton(52);
+    }
+    ImGui::SameLine(0.f, 20.f);
+    if (toggleButton("网格边", gShowEdges)) clickButton(53);
     ImGui::SameLine();
-    if (ImGui::Button("展开")) clickButton(40);
-    ImGui::SameLine();
-    if (ImGui::Button(gShowExtra ? "收起" : "更多")) clickButton(60);
+    if (toggleButton("翻转面", gShowFlips)) clickButton(54);
+    ImGui::SameLine(0.f, 20.f);
+    if (toggleButton(gPickCones ? "正在点锥" : "锥点", gPickCones)) clickButton(30);
+    ImGui::SameLine(0.f, 20.f);
+    if (toggleButton(gShowExtra ? "收起" : "更多", gShowExtra)) clickButton(60);
+
     if (gShowExtra) {
-        if (toolButton(gPickCones ? "锥点点选中" : "锥奇异点", gPickCones)) clickButton(30);
-        ImGui::SameLine();
         if (ImGui::Button("Ben-Chen 2008")) clickButton(31);
         ImGui::SameLine();
-        if (ImGui::Button("清除")) clickButton(41);
+        if (toggleButton("棋盘格", gTexture == Texture::Checker)) clickButton(50);
         ImGui::SameLine();
-        if (toolButton("棋盘格", gTexture == Texture::Checker)) clickButton(50);
-        ImGui::SameLine();
-        if (toolButton("共形畸变", gTexture == Texture::Distortion)) clickButton(51);
+        if (toggleButton("共形畸变", gTexture == Texture::Distortion)) clickButton(51);
         ImGui::SameLine();
         if (ImGui::Button(schemeName(gScheme))) clickButton(20);
     }
-    ImGui::TextWrapped("%s", gStatus.c_str());
+
+    const float legendReserve = 72.f;
+    const float statusWidth = std::max(40.f, ImGui::GetContentRegionAvail().x - legendReserve);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.40f, 0.42f, 0.45f, 1.f));
+    ImGui::TextUnformatted(fitText(gStatus, statusWidth).c_str());
+    ImGui::PopStyleColor();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImVec2 legend(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - legendReserve, ImGui::GetItemRectMin().y);
+    draw->AddCircleFilled(ImVec2(legend.x + 4.f, legend.y + ImGui::GetFontSize() * 0.5f), 4.f, IM_COL32(217, 51, 38, 255), 16);
+    draw->AddText(ImVec2(legend.x + 14.f, legend.y), IM_COL32(92, 84, 88, 255), "锥点");
+    const ImVec2 bar = ImGui::GetWindowPos();
+    draw->AddLine(ImVec2(bar.x, bar.y + ImGui::GetWindowHeight() - 1.f),
+                  ImVec2(bar.x + ImGui::GetWindowWidth(), bar.y + ImGui::GetWindowHeight() - 1.f), IM_COL32(214, 212, 206, 255), 1.f);
     ImGui::End();
-    const Panel left = leftPanel();
-    const Panel right = rightPanel();
-    ImDrawList* overlay = ImGui::GetForegroundDrawList();
-    overlay->AddText(ImVec2(left.x + 10.f, left.y + 8.f), IM_COL32(30, 34, 40, 255), "3D");
-    overlay->AddText(ImVec2(right.x + 10.f, right.y + 8.f), IM_COL32(30, 34, 40, 255), gHasResult ? "UV" : "UV · 点展开");
+    ImGui::PopStyleColor(6);
+    ImGui::PopStyleVar(6);
+
+    drawPanelTag(leftPanel(), "网格");
+    drawPanelTag(rightPanel(), gHasResult ? "UV" : "待展开");
     imguiEnd();
 }
 
 void drawFrame() {
     glViewport(0, 0, static_cast<int>(gWidth * gScale), static_cast<int>(gHeight * gScale));
-    glClearColor(0.93f, 0.94f, 0.95f, 1.f);
+    glClearColor(0.90f, 0.90f, 0.888f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
     const Panel left = leftPanel();
@@ -806,8 +971,10 @@ void drawFrame() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     const int shade = gHasResult && gTexture == Texture::Checker ? 0 : 2;
     drawMesh(gTriangles, modelViewProjection(left), shade, 0);
-    drawMesh(gFlips3d, modelViewProjection(left), 3, 0);
-    drawMesh(gConeMarks, modelViewProjection(left), 2, 11.f * gScale);
+    if (gShowFlips) drawMesh(gFlips3d, modelViewProjection(left), 3, 0);
+    drawMesh(gConeMarks, modelViewProjection(left), 2, 11.f * gScale, MeshDraw::Points);
+    if (gShowEdges) drawMesh(gEdges, modelViewProjection(left), 4, 0, MeshDraw::Lines);
+    if (gShowCircles && gMethod == Method::Circle) drawMesh(gCircles, modelViewProjection(left), 4, 0, MeshDraw::Lines);
 
     viewportOf(right);
     glClearColor(0.96f, 0.96f, 0.94f, 1.f);
@@ -816,7 +983,7 @@ void drawFrame() {
         const Mat4 uv = uvMatrix(right);
         drawMesh(gUvTriangles, uv, shade, 0);
         glDisable(GL_DEPTH_TEST);
-        drawMesh(gFlipTris, uv, 3, 0);
+        if (gShowFlips) drawMesh(gFlipTris, uv, 3, 0);
         glEnable(GL_DEPTH_TEST);
     }
     glDisable(GL_SCISSOR_TEST);

@@ -3,7 +3,6 @@
 
 #include "ConeParameterization.h"
 #include "Solver.h"
-#include <stack>
 #include <unordered_map>
 #include <vector>
 
@@ -31,10 +30,6 @@ protected:
     
     // computes scale factors
     bool computeScaleFactors();
-    
-    // determines position of unfixed face vertex
-    void performFaceLayout(HalfEdgeCIter he, const Eigen::Vector2d& dir, 
-                           std::unordered_map<int, bool>& visited, std::stack<EdgeCIter>& stack);
     
     // sets uvs
     void setUVs();

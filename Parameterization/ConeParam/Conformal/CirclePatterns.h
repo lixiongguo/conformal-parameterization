@@ -8,8 +8,6 @@
 #else
 #include "MosekSolver.h"
 #endif
-#include <stack>
-#include <unordered_map>
 #include <vector>
 
 class CirclePatterns: public ConeParameterization {
@@ -48,10 +46,6 @@ protected:
     
     // computes angles and edge lengths
     void computeAnglesAndEdgeLengths(Eigen::VectorXd& lengths);
-    
-    // determines position of unfixed face vertex
-    void performFaceLayout(HalfEdgeCIter he, const Eigen::Vector2d& dir, Eigen::VectorXd& lengths,
-                           std::unordered_map<int, bool>& visited, std::stack<EdgeCIter>& stack);
     
     // sets uvs
     void setUVs();

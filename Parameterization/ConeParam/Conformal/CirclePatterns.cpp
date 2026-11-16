@@ -542,63 +542,11 @@ void CirclePatterns::computeAnglesAndEdgeLengths(Eigen::VectorXd& lengths)
     }
 }
 
-void CirclePatterns::performFaceLayout(HalfEdgeCIter he, const Eigen::Vector2d& dir,
-                                       Eigen::VectorXd& lengths, std::unordered_map<int, bool>& visited,
-                                       std::stack<EdgeCIter>& stack)
-{
-    if (!he->onBoundary) {
-        int fIdx = he->face->index;
-        if (visited.find(fIdx) == visited.end()) {
-            HalfEdgeCIter next = he->next;
-            HalfEdgeCIter prev = he->next->next;
-            
-            // compute new uv position
-            double angle = angles[next->index];
-            Eigen::Vector2d newDir = {cos(angle)*dir[0] - sin(angle)*dir[1],
-                                      sin(angle)*dir[0] + cos(angle)*dir[1]};
-            
-            prev->vertex->uv = he->vertex->uv + newDir*lengths[prev->edge->index];
-            
-            // mark face as visited
-            visited[fIdx] = true;
-            
-            // push edges onto stack
-            stack.push(next->edge);
-            stack.push(prev->edge);
-        }
-    }
-}
-
 void CirclePatterns::setUVs()
 {
-    // compute edge lengths
     Eigen::VectorXd lengths(mesh.edges.size());
     computeAnglesAndEdgeLengths(lengths);
-    
-    // push any edge
-    std::stack<EdgeCIter> stack;
-    EdgeCIter e = mesh.edges.begin();
-    stack.push(e);
-    e->he->vertex->uv = Eigen::Vector2d::Zero();
-    e->he->next->vertex->uv = Eigen::Vector2d(lengths[e->index], 0);
-    
-    // perform layout
-    std::unordered_map<int, bool> visited;
-    while (!stack.empty()) {
-        EdgeCIter e = stack.top();
-        stack.pop();
-        
-        HalfEdgeCIter h1 = e->he;
-        HalfEdgeCIter h2 = h1->flip;
-        
-        // compute edge vector
-        Eigen::Vector2d dir = h2->vertex->uv - h1->vertex->uv;
-        dir.normalize();
-        
-        performFaceLayout(h1, dir, lengths, visited, stack);
-        performFaceLayout(h2, -dir, lengths, visited, stack);
-    }
-    
+    layoutIntrinsicMetric(lengths);
     normalize();
 }
 
